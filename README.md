@@ -2,6 +2,8 @@
   <img src="assets/imgs/logo_only.png" alt="ProbX News Logo" width="360" />
 </div>
 
+![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)
+
 # ProbX News
 
 ProbX News is an AI-powered fact-checking experience for web and mobile that lets users drop a news link or image and instantly get a credibility verdict, sourced evidence, and a clear audit trail of how the agent reasoned. The interface keeps users in the loop with a live progress indicator and a ticker-styled ad rail, then surfaces a bold Real/Fake result with curated sources.
