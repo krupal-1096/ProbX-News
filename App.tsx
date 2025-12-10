@@ -48,7 +48,6 @@ const BootScreen: React.FC = () => {
         </video>
       </div>
       <div className="absolute bottom-14 md:bottom-10 text-center px-6">
-        <p className="text-xs font-mono text-slate-500 uppercase tracking-[0.2em] mb-1">Boot</p>
         <p className="text-lg font-semibold text-slate-800">Starting multi-model fact-checker</p>
         <p className="text-slate-500 text-sm">{steps[step]}</p>
       </div>
@@ -62,6 +61,9 @@ const App: React.FC = () => {
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number>(60);
+  const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
+  const [downloadPct, setDownloadPct] = useState<number>(0);
+  const [isReady, setIsReady] = useState<boolean>(false);
 
   const modeSettings: Record<AnalysisMode, number> = {
     fast: 30,
@@ -78,6 +80,8 @@ const App: React.FC = () => {
   const handleAnalyze = async (input: string | File, type: InputType, model: ModelChoice, mode: AnalysisMode) => {
     setView('processing');
     setError(null);
+    setDownloadMsg("this will take a moment...");
+    setDownloadPct(0);
     let baseEta = modeSettings[mode];
     if (type === InputType.IMAGE) {
       baseEta = Math.round(baseEta * 1.2); // slight buffer for image processing
@@ -90,9 +94,16 @@ const App: React.FC = () => {
     setEtaSeconds(baseEta);
 
     try {
-      const { analyzeContent } = await loadAnalyzer();
+      const mod = await loadAnalyzer();
+      mod.registerDownloadProgress((msg, pct) => {
+        setDownloadMsg(msg);
+        if (typeof pct === 'number') setDownloadPct(Math.round(pct * 100));
+        if (msg === null) setIsReady(true);
+      });
+      const { analyzeContent } = mod;
       const result = await analyzeContent(input, type, model, mode);
       setAnalysisData(result);
+      setDownloadMsg(null);
       if (result.sources?.length) {
         const adjusted = Math.max(20, Math.min(300, baseEta + result.sources.length * 10));
         setEtaSeconds(adjusted);
@@ -138,7 +149,17 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {view === 'input' && <InputSection onAnalyze={handleAnalyze} />}
+        {downloadMsg && (
+          <div className="w-full bg-blue-50 border-l-4 border-blue-500 text-blue-800 p-4 mb-6 rounded shadow-sm" role="status">
+            <p className="font-bold">Preparing models</p>
+            <p>{downloadMsg}</p>
+            <div className="w-full bg-blue-100 h-2 rounded mt-2 overflow-hidden">
+              <div className="h-2 bg-blue-500 transition-all" style={{ width: `${Math.min(100, downloadPct)}%` }}></div>
+            </div>
+          </div>
+        )}
+
+        {view === 'input' && <InputSection onAnalyze={handleAnalyze} disabled={!isReady && !!downloadMsg} />}
 
         {view === 'processing' && <AnalysisLoader etaSeconds={etaSeconds} />}
 

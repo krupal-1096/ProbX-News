@@ -2,18 +2,18 @@ import React, { useState, useRef } from 'react';
 import { AnalysisMode, InputType, ModelChoice } from '../types';
 
 interface InputSectionProps {
-  onAnalyze: (input: string | File, type: InputType, model: ModelChoice, mode: AnalysisMode) => void;
+  onAnalyze: (input: string, type: InputType, model: ModelChoice, mode: AnalysisMode) => void;
+  disabled?: boolean;
 }
 
-export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze }) => {
+export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze, disabled = false }) => {
   const [inputType, setInputType] = useState<InputType>(InputType.TEXT);
   const [textInput, setTextInput] = useState('');
   const [fileInput, setFileInput] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<ModelChoice>('gemini-lite');
-  const [selectedMode, setSelectedMode] = useState<AnalysisMode>('fast');
+  const [selectedMode, setSelectedMode] = useState<AnalysisMode>('deep-analytic');
   const [showSettings, setShowSettings] = useState<boolean>(false);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -21,9 +21,7 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze }) => {
     if (file) {
       setFileInput(file);
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setPreviewUrl(reader.result as string);
-      };
+      reader.onloadend = () => setPreviewUrl(reader.result as string);
       reader.readAsDataURL(file);
     }
   };
@@ -76,7 +74,7 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze }) => {
               <textarea
                 rows={4}
                 className="w-full p-4 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none bg-slate-50 text-lg"
-                placeholder="e.g., https://news-site.com/article or 'The moon is made of cheese...'"
+                placeholder="paste link or text here..."
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
               />
@@ -127,17 +125,14 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze }) => {
 
           <button
             type="submit"
-            disabled={inputType === InputType.TEXT ? !textInput : !fileInput}
+            disabled={(inputType === InputType.TEXT ? !textInput : !fileInput) || disabled}
             className={`w-full py-4 rounded-xl font-bold text-white text-lg shadow-lg transition-all transform active:scale-95 flex items-center justify-center gap-2
-              ${(inputType === InputType.TEXT ? !textInput : !fileInput)
+              ${((inputType === InputType.TEXT ? !textInput : !fileInput) || disabled)
                 ? 'bg-slate-300 cursor-not-allowed'
                 : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'
               }`}
           >
-            <span>IDENTIFY FAKE</span>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-            </svg>
+            <span>Analyze Now</span>
           </button>
 
           <button
@@ -158,9 +153,8 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze }) => {
             <p className="text-xs font-semibold text-slate-500 uppercase mb-3">AI Model</p>
             <div className="space-y-2">
               {[
-                { id: 'gemini-lite', label: 'Gemini-Lite (community)', desc: 'Stable generalist; good for mixed media.' },
-                { id: 'grok-lite', label: 'Grok-Lite (community)', desc: 'Sharper tone/emotion reads; slower first load.' },
-                { id: 'open-bart-clip', label: 'Open BART + CLIP', desc: 'Balanced text/image signal; no sign-up.' },
+                { id: 'gemini-lite', label: 'Gemini-Lite (text-first)', desc: 'Smaller download; balanced credibility checks.' },
+                { id: 'grok-lite', label: 'Grok-Lite (text-first)', desc: 'Alternative tone/intent signals with similar footprint.' },
               ].map((m) => (
                 <label key={m.id} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${selectedModel === m.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
                   <input

@@ -4,36 +4,55 @@ import { AnalysisMode, AnalysisResult, AgentLogEntry, InputType, ModelChoice, So
 env.allowLocalModels = false; // always fetch hosted models (no API keys required)
 
 type ZeroShotClassifier = Awaited<ReturnType<typeof pipeline<"zero-shot-classification">>>;
-type ZeroShotImageClassifier = Awaited<ReturnType<typeof pipeline<"zero-shot-image-classification">>>;
-type ImageToText = Awaited<ReturnType<typeof pipeline<"image-to-text">>>;
-
 let textPipelinePromise: Promise<ZeroShotClassifier> | null = null;
-let imagePipelinePromise: Promise<ZeroShotImageClassifier> | null = null;
-let imageToTextPromise: Promise<ImageToText> | null = null;
+let progressCallback: ((msg: string | null, progress?: number) => void) | null = null;
 
 const MODE_SETTINGS: Record<AnalysisMode, { sources: number; estimateSeconds: number }> = {
-  fast: { sources: 2, estimateSeconds: 45 },
-  analyze: { sources: 4, estimateSeconds: 90 },
-  "deep-analytic": { sources: 6, estimateSeconds: 240 }
+  fast: { sources: 2, estimateSeconds: 25 },
+  analyze: { sources: 3, estimateSeconds: 45 },
+  "deep-analytic": { sources: 5, estimateSeconds: 90 }
+};
+
+export const registerDownloadProgress = (cb: (msg: string | null, progress?: number) => void) => {
+  progressCallback = cb;
 };
 
 const getTextPipeline = () => {
   if (!textPipelinePromise) {
-    textPipelinePromise = pipeline("zero-shot-classification", "Xenova/bart-large-mnli");
+    progressCallback?.("Downloading text model", 0.01);
+    textPipelinePromise = pipeline("zero-shot-classification", "Xenova/nli-deberta-v3-small", {
+      progress_callback: (data: any) => {
+        if (data?.status === 'download') {
+          const pct = data.progress ? Math.min(0.99, data.progress) : undefined;
+          const name = data.file || data.name || data.url || "model";
+          progressCallback?.(`Downloading ${name}`, pct);
+        }
+        if (data?.status === 'ready') {
+          progressCallback?.(null, 1);
+        }
+      }
+    }).finally(() => progressCallback?.(null, 1));
   }
   return textPipelinePromise;
 };
 
+type ZeroShotImageClassifier = Awaited<ReturnType<typeof pipeline<"zero-shot-image-classification">>>;
+type ImageToText = Awaited<ReturnType<typeof pipeline<"image-to-text">>>;
+let imagePipelinePromise: Promise<ZeroShotImageClassifier> | null = null;
+let imageToTextPromise: Promise<ImageToText> | null = null;
+
 const getImagePipeline = () => {
   if (!imagePipelinePromise) {
-    imagePipelinePromise = pipeline("zero-shot-image-classification", "Xenova/clip-vit-base-patch32");
+    progressCallback?.("Downloading image model", 0.01);
+    imagePipelinePromise = pipeline("zero-shot-image-classification", "Xenova/clip-vit-base-patch32").finally(() => progressCallback?.(null, 1));
   }
   return imagePipelinePromise;
 };
 
 const getImageToText = () => {
   if (!imageToTextPromise) {
-    imageToTextPromise = pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning");
+    progressCallback?.("Downloading image caption model", 0.01);
+    imageToTextPromise = pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning").finally(() => progressCallback?.(null, 1));
   }
   return imageToTextPromise;
 };
