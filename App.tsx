@@ -4,8 +4,14 @@ import { NewsTicker } from './components/NewsTicker';
 import { InputSection } from './components/InputSection';
 import { AnalysisLoader } from './components/AnalysisLoader';
 import { ResultDisplay } from './components/ResultDisplay';
-import { analyzeContent } from './services/freeAiService';
 import { AnalysisMode, AnalysisResult, InputType, ModelChoice } from './types';
+let analyzerLoader: Promise<typeof import('./services/freeAiService')> | null = null;
+const loadAnalyzer = () => {
+  if (!analyzerLoader) {
+    analyzerLoader = import('./services/freeAiService');
+  }
+  return analyzerLoader;
+};
 import appBootWebm from './assets/android/app-boot.webm';
 import appBootMp4 from './assets/android/app-boot.mp4';
 import appLogo from './assets/android/app-logo.png';
@@ -84,6 +90,7 @@ const App: React.FC = () => {
     setEtaSeconds(baseEta);
 
     try {
+      const { analyzeContent } = await loadAnalyzer();
       const result = await analyzeContent(input, type, model, mode);
       setAnalysisData(result);
       if (result.sources?.length) {
