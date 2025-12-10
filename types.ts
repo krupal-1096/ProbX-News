@@ -29,9 +29,16 @@ export interface AnalysisResult {
   detailedMarkdown: string;
   sources: Source[];
   agentLogs: AgentLogEntry[];
+  emotion: string;
+  harmSignals: string;
+  ethics: 'good' | 'moderate' | 'bad';
+  modelUsed: ModelChoice;
+  modeUsed: AnalysisMode;
 }
 
-export type ModelId = 'gemini-3-pro-preview' | 'gemini-flash-latest' | 'gemini-flash-lite-latest';
+export type ModelChoice = 'open-bart-clip' | 'grok-lite' | 'gemini-lite';
+
+export type AnalysisMode = 'fast' | 'analyze' | 'deep-analytic';
 
 declare global {
   interface AIStudio {

@@ -1,23 +1,39 @@
 import React, { useEffect, useState } from 'react';
 
+interface Props {
+  etaSeconds?: number;
+}
+
 const LOADING_STEPS = [
-  "Initializing Gemini Agent...",
-  "Scanning Web Resources...",
-  "Checking X (Twitter) Feeds...",
-  "Cross-referencing Image Metadata...",
-  "Compiling Fact Sheet...",
-  "Validating Sources...",
-  "Generating Verification Report..."
+  "Loading free AI models...",
+  "Scanning language tone...",
+  "Checking domain reputation...",
+  "Inspecting image clues...",
+  "Compiling fact sheet...",
+  "Scoring credibility...",
+  "Generating verdict..."
 ];
 
-export const AnalysisLoader: React.FC = () => {
+export const AnalysisLoader: React.FC<Props> = ({ etaSeconds = 60 }) => {
   const [stepIndex, setStepIndex] = useState(0);
+  const [remaining, setRemaining] = useState(etaSeconds);
 
   useEffect(() => {
     const interval = setInterval(() => {
       setStepIndex((prev) => (prev + 1) % LOADING_STEPS.length);
     }, 1500); // Change step every 1.5s
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setRemaining(etaSeconds);
+  }, [etaSeconds]);
+
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setRemaining((r) => (r > 0 ? r - 1 : 0));
+    }, 1000);
+    return () => clearInterval(tick);
   }, []);
 
   return (
@@ -35,10 +51,11 @@ export const AnalysisLoader: React.FC = () => {
       </div>
 
       {/* Status Text */}
-      <h3 className="text-xl font-bold text-slate-800 mb-2">Agent Working</h3>
-      <p className="text-blue-600 font-mono text-sm bg-blue-50 px-4 py-2 rounded-full border border-blue-100 transition-all duration-300">
+      <h3 className="text-xl font-bold text-slate-800 mb-1">Agent Working</h3>
+      <p className="text-blue-600 font-mono text-sm bg-blue-50 px-4 py-2 rounded-full border border-blue-100 transition-all duration-300 mb-1">
         {LOADING_STEPS[stepIndex]}
       </p>
+      <p className="text-xs text-slate-500 font-semibold">ETA: {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')}</p>
 
       {/* Data stream visual (simulated) */}
       <div className="mt-8 w-full max-w-md space-y-2 opacity-60">

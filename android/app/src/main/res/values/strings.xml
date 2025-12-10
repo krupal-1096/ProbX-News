@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ProbX-News</string>
+    <string name="title_activity_main">ProbX-News</string>
+    <string name="package_name">com.probx.news</string>
+    <string name="custom_url_scheme">com.probx.news</string>
+</resources>

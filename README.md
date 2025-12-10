@@ -10,35 +10,30 @@ ProbX News is an AI-powered fact-checking experience for web and mobile that let
 
 ## How It Works
 - Input: Users submit a URL/text snippet or upload an image.
-- Agent: Backend calls Google Gemini (`gemini-3-pro-preview`) with grounding and schema guidance to extract claims, search the web, and log findings.
-- Evidence: The model returns a verdict (Real/Fake/Inconclusive/Satire), confidence score, markdown report, agent log rows (the “mental spreadsheet”), and grounded sources.
-- UI: A processing state shows live tasks; the result view displays the verdict, key reasoning, and scrollable sources, with a reset for new checks.
+- Agent: Free, no-signup AI models (Transformers.js) run in the browser to score credibility—zero API keys required. Users can pick a model (open BART/CLIP, Grok-lite, Gemini-lite) and a mode (Fast/Analyze/Analytic). Text is zero-shot classified; images use CLIP-style similarity. Each query is cross-checked via Google/Bing HTML mirrors (r.jina.ai) to surface corroborating sources.
+- Evidence: The engine returns a verdict (Real/Fake/Inconclusive/Satire), confidence score with color band, emotion intent, harm/safety flags, ethics rating, markdown report, agent log rows, and the sources used.
+- UI: Boot animation → home screen with model/mode picker → processing state with ETA → result view with verdict, sources, emotions, safety, ethics, and reset.
 
 ## Quickstart
-Prerequisites: Node.js 18+ and a Google AI Studio API key.
+Prerequisites: Node.js 18+.
 
 1) Install deps  
 `npm install`
 
-2) Provide your Gemini API key (picked up from `API_KEY`):  
-`API_KEY=your_key_here npm run dev`
-
-3) Run locally  
+2) Run locally  
 `npm run dev`  
 Open the printed Vite URL (default http://localhost:5173).
 
 ## Environment
-- `API_KEY`: Google AI Studio key with access to `gemini-3-pro-preview`.
-- No other services are required; browsing/grounding is handled via the Gemini tool call.
+No API keys or sign-ins are required. Models are fetched on demand from public hubs and run directly in the browser. For cross-checking, the app performs a lightweight web lookup through r.jina.ai (Google/Bing mirrors); if the mirror is blocked, the app still returns the model-based verdict.
 
 ## Deploy
 - Build for production: `npm run build` (outputs to `dist/`).  
 - Serve `dist/` on your hosting platform or containerize for Cloud Run.  
-- Be sure to set `API_KEY` in your deployment environment secrets.
 
 ## Tech Stack
 - React + Vite + TypeScript
-- Google Generative AI SDK (`@google/genai`) calling `gemini-3-pro-preview`
+- Transformers.js (browser) + CLIP/BART models (community Grok-lite/Gemini-lite presets)
 - Tailwind-style utility classes for styling
 
 ## Attribution & License
