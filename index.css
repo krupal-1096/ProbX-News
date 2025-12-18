@@ -1,1 +1,91 @@
-/* global styles placeholder */
+/* Boot animation styling shared across web + Android webview */
+.boot-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.35;
+  animation: boot-drift 14s ease-in-out infinite;
+}
+.boot-orb-one {
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle at 30% 30%, rgba(59, 130, 246, 0.7), transparent 55%);
+  top: -160px;
+  left: -120px;
+}
+.boot-orb-two {
+  width: 360px;
+  height: 360px;
+  background: radial-gradient(circle at 70% 60%, rgba(94, 234, 212, 0.55), transparent 60%);
+  bottom: -140px;
+  right: -110px;
+  animation-delay: -4s;
+}
+.boot-glow {
+  position: absolute;
+  inset: -12px;
+  background: conic-gradient(from 120deg, rgba(59,130,246,0.55), rgba(59,130,246,0.1), rgba(59,130,246,0.6));
+  filter: blur(26px);
+  opacity: 0.75;
+  animation: boot-pulse 6s ease-in-out infinite;
+}
+.boot-scan {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.22) 50%, rgba(255,255,255,0) 100%);
+  transform: translateY(100%);
+  animation: boot-scan 2.8s ease-in-out infinite;
+}
+
+.ready-check-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: white;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 30px rgba(34,197,94,0.45);
+  animation: ready-pop 0.9s ease-in-out infinite alternate;
+}
+
+.bar-stripes {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255,255,255,0.16),
+    rgba(255,255,255,0.16) 10px,
+    rgba(255,255,255,0.05) 10px,
+    rgba(255,255,255,0.05) 20px
+  );
+  background-size: 200% 100%;
+  animation: stripes-shift 1.4s linear infinite;
+}
+
+@keyframes boot-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(80px, 40px, 0) scale(1.05); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes boot-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(0.98); }
+  50% { opacity: 0.9; transform: scale(1.03); }
+}
+
+@keyframes boot-scan {
+  0% { transform: translateY(110%); }
+  50% { transform: translateY(-10%); }
+  100% { transform: translateY(-120%); }
+}
+
+@keyframes ready-pop {
+  0% { transform: scale(0.96); }
+  100% { transform: scale(1.05); }
+}
+
+@keyframes stripes-shift {
+  0% { background-position: 0 0; }
+  100% { background-position: 200% 0; }
+}

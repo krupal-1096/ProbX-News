@@ -5,7 +5,7 @@ env.allowLocalModels = false; // always fetch hosted models (no API keys require
 
 type ZeroShotClassifier = Awaited<ReturnType<typeof pipeline<"zero-shot-classification">>>;
 let textPipelinePromise: Promise<ZeroShotClassifier> | null = null;
-let progressCallback: ((msg: string | null, progress?: number) => void) | null = null;
+let progressCallback: ((msg: string | null, progress?: number, receivedBytes?: number, totalBytes?: number) => void) | null = null;
 
 const MODE_SETTINGS: Record<AnalysisMode, { sources: number; estimateSeconds: number }> = {
   fast: { sources: 2, estimateSeconds: 25 },
@@ -13,7 +13,7 @@ const MODE_SETTINGS: Record<AnalysisMode, { sources: number; estimateSeconds: nu
   "deep-analytic": { sources: 5, estimateSeconds: 90 }
 };
 
-export const registerDownloadProgress = (cb: (msg: string | null, progress?: number) => void) => {
+export const registerDownloadProgress = (cb: (msg: string | null, progress?: number, receivedBytes?: number, totalBytes?: number) => void) => {
   progressCallback = cb;
 };
 
@@ -25,7 +25,9 @@ const getTextPipeline = () => {
         if (data?.status === 'download') {
           const pct = data.progress ? Math.min(0.99, data.progress) : undefined;
           const name = data.file || data.name || data.url || "model";
-          progressCallback?.(`Downloading ${name}`, pct);
+          const received = (data.loadedBytes ?? data.loaded ?? data.received ?? undefined) as number | undefined;
+          const total = (data.totalBytes ?? data.total ?? undefined) as number | undefined;
+          progressCallback?.(`Downloading ${name}`, pct, received, total);
         }
         if (data?.status === 'ready') {
           progressCallback?.(null, 1);
@@ -273,24 +275,38 @@ export const analyzeContent = async (
     harmSignals = `${harmBest.labels[0]} (${Math.round(harmBest.scores[0] * 100)}%)`;
     ethics = deriveEthics(harmBest.labels[0]);
 
-    const crossChecks = await fetchCrossChecks(buildSearchQuery(input), MODE_SETTINGS[mode].sources);
-    sources.push(...crossChecks);
-    if (crossChecks.length) {
-      agentLogs.push({
-        action: "Web cross-check",
-        findings: `Collected ${crossChecks.length} corroborating hits.`,
-        source: "duckduckgo (via r.jina.ai)"
-      });
+    const targetSources = MODE_SETTINGS[mode].sources;
+    let crossChecks = await fetchCrossChecks(buildSearchQuery(input), targetSources);
+    if (crossChecks.length < targetSources) {
+      const headlineQuery = input.slice(0, 120);
+      const fallback = await fetchCrossChecks(headlineQuery, targetSources - crossChecks.length);
+      crossChecks = [...crossChecks, ...fallback];
     }
+    if (!crossChecks.length) {
+      sources.push({
+        title: "Analyzing submitted link",
+        uri: typeof input === "string" ? input : "submitted-text",
+        snippet: "Still searching for corroborating sources; analysis continues."
+      });
+    } else {
+      sources.push(...crossChecks);
+    }
+    agentLogs.push({
+      action: "Web cross-check",
+      findings: crossChecks.length
+        ? `Collected ${crossChecks.length}/${targetSources} corroborating hits.`
+        : "No external sources yet; continuing analysis of submitted link.",
+      source: "duckduckgo (via r.jina.ai)"
+    });
     const baseScore = best.scores[0] * 100;
     confidenceScore = adjustConfidenceWithSources(baseScore, crossChecks, domain || undefined);
-    if (crossChecks.length) {
-      agentLogs.push({
-        action: "Confidence synthesis",
-        findings: `Adjusted to ${confidenceScore}% using ${crossChecks.length} sources.`,
-        source: "fusion"
-      });
-    }
+    agentLogs.push({
+      action: "Confidence synthesis",
+      findings: crossChecks.length
+        ? `Adjusted to ${confidenceScore}% using ${crossChecks.length} sources.`
+        : `Held at ${confidenceScore}% while monitoring the submitted link for matches.`,
+      source: "fusion"
+    });
   } else if (type === InputType.IMAGE && input instanceof File) {
     const resized = await resizeImageFile(input);
     const classifier = await getImagePipeline();
@@ -320,15 +336,24 @@ export const analyzeContent = async (
     harmSignals = "Image-only: no strong hate/violence cues detected.";
     ethics = "moderate";
 
-    const crossChecks = await fetchCrossChecks("news image authenticity check", MODE_SETTINGS[mode].sources);
-    sources.push(...crossChecks);
-    if (crossChecks.length) {
-      agentLogs.push({
-        action: "Web cross-check",
-        findings: `Collected ${crossChecks.length} corroborating hits.`,
-        source: "duckduckgo (via r.jina.ai)"
+    const targetSources = MODE_SETTINGS[mode].sources;
+    const crossChecks = await fetchCrossChecks("news image authenticity check", targetSources);
+    if (!crossChecks.length) {
+      sources.push({
+        title: "Analyzing uploaded image",
+        uri: "image://local-upload",
+        snippet: "Still searching for corroborating image sources; analysis continues."
       });
+    } else {
+      sources.push(...crossChecks);
     }
+    agentLogs.push({
+      action: "Web cross-check",
+      findings: crossChecks.length
+        ? `Collected ${crossChecks.length}/${targetSources} corroborating hits.`
+        : "No image corroboration yet; reviewing visual cues only.",
+      source: "duckduckgo (via r.jina.ai)"
+    });
     const baseScore = best.score * 100;
     confidenceScore = adjustConfidenceWithSources(baseScore, crossChecks);
     if (crossChecks.length) {

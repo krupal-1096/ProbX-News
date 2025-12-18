@@ -41,8 +41,9 @@ No API keys or sign-ins are required. Models are fetched on demand from public h
   - `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 
 Assets:
-- Boot animation/video: `assets/android/app-boot.webm` with MP4 fallback
-- App logo: `assets/android/app-logo.png`
+- Boot animation: CSS-driven animated splash (no bundled video assets)
+- App icons: `assets/icons/android/*` (mirrored into `android/app/src/main/res/mipmap-*`)
+- App mark: `assets/imgs/logo_only.png`
 
 Notes:
 - Re-run `npm run build` + `npx cap sync android` after web code changes.
