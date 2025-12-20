@@ -1,8 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AnalysisMode, InputType, ModelChoice } from '../types';
 
 interface InputSectionProps {
-  onAnalyze: (input: string, type: InputType, model: ModelChoice, mode: AnalysisMode) => void;
+  onAnalyze: (input: string | File, type: InputType, model: ModelChoice, mode: AnalysisMode) => void;
   disabled?: boolean;
 }
 
@@ -11,10 +11,27 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze, disabled 
   const [textInput, setTextInput] = useState('');
   const [fileInput, setFileInput] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<ModelChoice>('gemini-lite');
+  const [selectedModel, setSelectedModel] = useState<ModelChoice>('gemini-1.5-flash');
   const [selectedMode, setSelectedMode] = useState<AnalysisMode>('deep-analytic');
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const placeholderOptions = [
+    "Is this headline trustworthy?",
+    "Serious: 'WHO reports malaria cases drop 20%'",
+    "Satire? 'Aliens run the stock market'",
+    "Concerned: 'Water contamination in my city?'",
+    "Paste a valid source link (news, blog, Reddit, X).",
+    "Funny? 'My cat solved climate change'"
+  ];
+  const [placeholder, setPlaceholder] = useState(placeholderOptions[0]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = placeholderOptions[Math.floor(Math.random() * placeholderOptions.length)];
+      setPlaceholder(next);
+    }, 3000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -39,7 +56,7 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze, disabled 
     <div className="w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-100">
       <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-8 text-center">
         <h2 className="text-3xl font-extrabold text-white mb-2">Verify the Truth</h2>
-        <p className="text-blue-100">AI models cross-check your link or image against the web in one shot.</p>
+        <p className="text-blue-100">We scan news sites for you and give a simple verdict.</p>
       </div>
 
       <div className="p-6">
@@ -74,7 +91,7 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze, disabled 
               <textarea
                 rows={4}
                 className="w-full p-4 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none bg-slate-50 text-lg"
-                placeholder="paste link or text here..."
+                placeholder={placeholder}
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
               />
@@ -150,11 +167,11 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze, disabled 
         {showSettings && (
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <div className="p-4 border border-slate-200 rounded-xl">
-            <p className="text-xs font-semibold text-slate-500 uppercase mb-3">AI Model</p>
+            <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Model</p>
             <div className="space-y-2">
               {[
-                { id: 'gemini-lite', label: 'Gemini-Lite (text-first)', desc: 'Smaller download; balanced credibility checks.' },
-                { id: 'grok-lite', label: 'Grok-Lite (text-first)', desc: 'Alternative tone/intent signals with similar footprint.' },
+                { id: 'gemini-1.5-flash', label: 'Gemini fact-checker', desc: 'Google AI: quick verdicts with short notes.' },
+                { id: 'openrouter-llama', label: 'Llama (OpenRouter free)', desc: 'Fast fallback; good for text claims.' }
               ].map((m) => (
                 <label key={m.id} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${selectedModel === m.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
                   <input
@@ -175,12 +192,12 @@ export const InputSection: React.FC<InputSectionProps> = ({ onAnalyze, disabled 
           </div>
 
           <div className="p-4 border border-slate-200 rounded-xl">
-            <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Analysis Mode</p>
+            <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Depth</p>
             <div className="space-y-2">
               {[
-                { id: 'fast', label: 'Fast Mode', detail: 'Targets 2 quick sources', eta: '' },
-                { id: 'analyze', label: 'Analyze Mode', detail: 'Targets 4 sources', eta: '' },
-                { id: 'deep-analytic', label: 'Deep Analytic Mode', detail: 'Targets 5+ sources, richer report', eta: '' },
+                { id: 'fast', label: 'Quick check', detail: 'Looks at a couple of sources', eta: '' },
+                { id: 'analyze', label: 'Balanced check', detail: 'Looks at a handful of sources', eta: '' },
+                { id: 'deep-analytic', label: 'Thorough check', detail: 'Casts a wider net and longer notes', eta: '' },
               ].map((m) => (
                 <label key={m.id} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${selectedMode === m.id ? 'border-amber-500 bg-amber-50' : 'border-slate-200 hover:bg-slate-50'}`}>
                   <input

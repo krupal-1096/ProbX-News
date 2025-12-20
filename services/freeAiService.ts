@@ -1,413 +1,112 @@
-import { pipeline, env } from "@xenova/transformers";
 import { AnalysisMode, AnalysisResult, AgentLogEntry, InputType, ModelChoice, Source, Verdict } from "../types";
 
-env.allowLocalModels = false; // always fetch hosted models (no API keys required)
-env.useBrowserCache = true; // persist model files for resume on reloads
-
-type ZeroShotClassifier = Awaited<ReturnType<typeof pipeline<"zero-shot-classification">>>;
-type ProgressExtra = {
-  phase?: "model" | "ocr";
-  model?: { received?: number; total?: number };
-  ocr?: { received?: number; total?: number };
-};
-let textPipelinePromise: Promise<ZeroShotClassifier> | null = null;
+type ProgressExtra = { phase?: "model" | "ocr" };
 let progressCallback: ((msg: string | null, progress?: number, receivedBytes?: number, totalBytes?: number, extra?: ProgressExtra) => void) | null = null;
 
-const DOWNLOAD_ESTIMATE_KEY = "probx-model-estimate-bytes";
-const FALLBACK_ESTIMATE_BYTES = 60 * 1024 * 1024;
+const env = import.meta.env as Record<string, string | undefined>;
+const GEMINI_KEY = (env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || "").trim();
+const OPENROUTER_KEY = (env.VITE_OPENAI_API_KEY || env.OPENROUTER_API_KEY || "").trim();
+const GEMINI_MODEL: ModelChoice = "gemini-1.5-flash";
+const OPENROUTER_MODEL: ModelChoice = "openrouter-llama";
+const DEBUG = !!import.meta.env.DEV;
+let ocrPipeline: Promise<any> | null = null;
 
-const getCachedEstimate = () => {
-  if (typeof window === "undefined") return FALLBACK_ESTIMATE_BYTES;
-  const raw = localStorage.getItem(DOWNLOAD_ESTIMATE_KEY);
-  const parsed = raw ? Number(raw) : NaN;
-  if (!Number.isFinite(parsed) || parsed <= 0) return FALLBACK_ESTIMATE_BYTES;
-  return parsed;
-};
-
-const setCachedEstimate = (bytes: number) => {
-  if (typeof window === "undefined") return;
-  if (!Number.isFinite(bytes) || bytes <= 0) return;
-  localStorage.setItem(DOWNLOAD_ESTIMATE_KEY, String(Math.round(bytes)));
-};
-
-const downloadTracker = {
-  totals: new Map<string, number>(),
-  loaded: new Map<string, number>()
-};
-const modelTracker = {
-  totals: new Map<string, number>(),
-  loaded: new Map<string, number>()
-};
-const ocrTracker = {
-  totals: new Map<string, number>(),
-  loaded: new Map<string, number>()
-};
-
-const OCR_ASSETS = [
-  "/tessdata/tesseract.esm.min.js",
-  "/tessdata/worker.min.js",
-  "/tessdata/tesseract-core.wasm",
-  "/tessdata/tesseract-core.wasm.js",
-  "/tessdata/eng.traineddata"
-];
-
-type AssetMeta = { total?: number; etag?: string | null; lastModified?: string | null };
-const ASSET_META_KEY = "probx-asset-meta";
-const ASSET_PROGRESS_KEY = "probx-asset-progress";
-const MODEL_PROGRESS_KEY = "probx-model-progress";
-
-const resetDownloadTracker = () => {
-  downloadTracker.totals.clear();
-  downloadTracker.loaded.clear();
-  modelTracker.totals.clear();
-  modelTracker.loaded.clear();
-  ocrTracker.totals.clear();
-  ocrTracker.loaded.clear();
-};
-
-const getTrackerStats = (tracker: typeof downloadTracker) => {
-  let total = 0;
-  let loaded = 0;
-  tracker.totals.forEach((bytes, name) => {
-    total += bytes;
-    const current = tracker.loaded.get(name) ?? 0;
-    loaded += Math.min(current, bytes);
-  });
-  tracker.loaded.forEach((bytes, name) => {
-    if (!tracker.totals.has(name)) loaded += bytes;
-  });
-  return { loaded, total };
-};
-
-const getAggregateStats = () => {
-  let total = 0;
-  let loaded = 0;
-  downloadTracker.totals.forEach((bytes, name) => {
-    total += bytes;
-    const current = downloadTracker.loaded.get(name) ?? 0;
-    loaded += Math.min(current, bytes);
-  });
-  downloadTracker.loaded.forEach((bytes, name) => {
-    if (!downloadTracker.totals.has(name)) loaded += bytes;
-  });
-  const totalBytes = total > 0 ? total : getCachedEstimate();
-  return { loaded, total: totalBytes };
-};
-
-const updateAggregateProgress = (msg: string, pctFallback?: number, phase?: ProgressExtra["phase"]) => {
-  const aggregate = getAggregateStats();
-  const aggregatePct = aggregate.total > 0
-    ? Math.min(0.99, aggregate.loaded / aggregate.total)
-    : pctFallback;
-  if (aggregate.total) setCachedEstimate(aggregate.total);
-  const modelStats = getTrackerStats(modelTracker);
-  const ocrStats = getTrackerStats(ocrTracker);
-  progressCallback?.(msg, aggregatePct, aggregate.loaded, aggregate.total, {
-    phase,
-    model: modelStats.total ? modelStats : undefined,
-    ocr: ocrStats.total ? ocrStats : undefined
-  });
-};
-
-const loadStoredAssetMeta = (): Record<string, AssetMeta> => {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(ASSET_META_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
+const debugLog = (...args: any[]) => {
+  if (DEBUG) {
+    console.debug("[probx-debug]", ...args);
   }
 };
-
-const saveAssetMeta = (meta: Record<string, AssetMeta>) => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(ASSET_META_KEY, JSON.stringify(meta));
-  } catch {
-    // ignore quota failures
-  }
+const MODEL_CONFIG: Record<ModelChoice, { provider: "gemini" | "openrouter"; modelId: string }> = {
+  "gemini-1.5-flash": { provider: "gemini", modelId: "google/gemini-1.5-flash" },
+  "openrouter-llama": { provider: "openrouter", modelId: "meta-llama/llama-3.2-3b-instruct:free" }
 };
-
-const assetMetaCache: Record<string, AssetMeta> = loadStoredAssetMeta();
-const assetProgress: Record<string, number> = (() => {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(ASSET_PROGRESS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-})();
-
-const saveAssetProgress = () => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(ASSET_PROGRESS_KEY, JSON.stringify(assetProgress));
-  } catch {
-    // ignore
-  }
-};
-
-const loadModelProgressCache = (): Record<string, { loaded?: number; total?: number }> => {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(MODEL_PROGRESS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const saveModelProgressCache = (data: Record<string, { loaded?: number; total?: number }>) => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(MODEL_PROGRESS_KEY, JSON.stringify(data));
-  } catch {
-    // ignore
-  }
-};
-
-const parseContentRange = (val: string | null): number | undefined => {
-  if (!val) return undefined;
-  const match = val.match(/\/(\d+)\s*$/);
-  if (!match) return undefined;
-  const num = Number(match[1]);
-  return Number.isFinite(num) ? num : undefined;
-};
-
-const fetchAssetMeta = async (url: string): Promise<AssetMeta> => {
-  const cached = assetMetaCache[url];
-  if (cached?.total) return cached;
-  let meta: AssetMeta = {};
-  try {
-    const headRes = await fetch(url, { method: "HEAD" });
-    if (headRes.ok) {
-      const len = Number(headRes.headers.get("Content-Length"));
-      const etag = headRes.headers.get("ETag");
-      const lastModified = headRes.headers.get("Last-Modified");
-      if (Number.isFinite(len) && len > 0) meta.total = len;
-      meta = { ...meta, etag, lastModified };
-    }
-  } catch {
-    // ignore
-  }
-  if (!meta.total) {
-    try {
-      const rangeRes = await fetch(url, { headers: { Range: "bytes=0-0" } });
-      if (rangeRes.ok || rangeRes.status === 206) {
-        const contentRange = rangeRes.headers.get("Content-Range");
-        const len = parseContentRange(contentRange);
-        if (len) meta.total = len;
-        const etag = rangeRes.headers.get("ETag");
-        const lastModified = rangeRes.headers.get("Last-Modified");
-        meta = { ...meta, etag, lastModified };
-      }
-    } catch {
-      // ignore
-    }
-  }
-  if (meta.total) {
-    assetMetaCache[url] = meta;
-    saveAssetMeta(assetMetaCache);
-  }
-  return meta;
-};
-
 const MODE_SETTINGS: Record<AnalysisMode, { sources: number; estimateSeconds: number }> = {
-  fast: { sources: 2, estimateSeconds: 25 },
-  analyze: { sources: 3, estimateSeconds: 45 },
-  "deep-analytic": { sources: 5, estimateSeconds: 90 }
+  fast: { sources: 2, estimateSeconds: 20 },
+  analyze: { sources: 4, estimateSeconds: 40 },
+  "deep-analytic": { sources: 6, estimateSeconds: 75 }
 };
 
-export const registerDownloadProgress = (cb: (msg: string | null, progress?: number, receivedBytes?: number, totalBytes?: number, extra?: ProgressExtra) => void) => {
+const ensureKey = () => {
+  if (!GEMINI_KEY && !OPENROUTER_KEY) {
+    throw new Error("Missing Gemini or OpenRouter API key.");
+  }
+};
+
+export const registerDownloadProgress = (cb: typeof progressCallback) => {
   progressCallback = cb;
 };
 
-const getTextPipeline = () => {
-  if (!textPipelinePromise) {
-    resetDownloadTracker();
-    const cachedModelProgress = loadModelProgressCache();
-    Object.entries(cachedModelProgress).forEach(([name, data]) => {
-      if (typeof data.total === "number") {
-        downloadTracker.totals.set(name, data.total);
-        modelTracker.totals.set(name, data.total);
-      }
-      if (typeof data.loaded === "number") {
-        downloadTracker.loaded.set(name, data.loaded);
-        modelTracker.loaded.set(name, data.loaded);
-      }
-    });
-    if (cachedModelProgress && Object.keys(cachedModelProgress).length) {
-      updateAggregateProgress("Resuming model download", undefined, "model");
-    }
-    progressCallback?.("Downloading text model", 0.01);
-    textPipelinePromise = pipeline("zero-shot-classification", "Xenova/nli-deberta-v3-small", {
-      progress_callback: (data: any) => {
-        if (data?.status === 'download') {
-          const pct = data.progress ? Math.min(0.99, data.progress) : undefined;
-          const name = data.file || data.name || data.url || "model";
-          const total = (data.totalBytes ?? data.total ?? undefined) as number | undefined;
-          let received = (data.loadedBytes ?? data.loaded ?? data.received ?? undefined) as number | undefined;
-          if (!received && typeof total === "number" && typeof pct === "number") {
-            received = Math.max(0, Math.round(total * pct));
-          }
-          if (typeof total === "number") downloadTracker.totals.set(name, total);
-          if (typeof received === "number") downloadTracker.loaded.set(name, received);
-          if (typeof total === "number") modelTracker.totals.set(name, total);
-          if (typeof received === "number") modelTracker.loaded.set(name, received);
-          const cacheEntry: { loaded?: number; total?: number } = {};
-          if (typeof received === "number") cacheEntry.loaded = received;
-          if (typeof total === "number") cacheEntry.total = total;
-          if (cacheEntry.loaded || cacheEntry.total) {
-            const current = loadModelProgressCache();
-            current[name] = { ...current[name], ...cacheEntry };
-            saveModelProgressCache(current);
-          }
-          updateAggregateProgress(`Downloading ${name}`, pct, "model");
-        }
-        if (data?.status === 'ready') {
-          updateAggregateProgress("Model ready", 0.99, "model");
-          if (typeof window !== "undefined") {
-            localStorage.removeItem(MODEL_PROGRESS_KEY);
-          }
-        }
-      }
-    }).then((pipeline) => pipeline);
-  }
-  return textPipelinePromise;
-};
-
-type TesseractModule = any;
-let tesseractLoader: Promise<TesseractModule> | null = null;
-
-const loadTesseract = async (): Promise<TesseractModule> => {
-  if (!tesseractLoader) {
-    // Fully offline import of the vendored ESM build.
-    const tessPath = "/tessdata/tesseract.esm.min.js";
-    // Use dynamic path to avoid bundler resolution; file is served from /public.
-    tesseractLoader = import(/* @vite-ignore */ tessPath);
-  }
-  return tesseractLoader;
-};
-
-const downloadAsset = async (url: string) => {
-  const meta = await fetchAssetMeta(url);
-  if (meta.total && meta.total > 0) {
-    downloadTracker.totals.set(url, meta.total);
-    ocrTracker.totals.set(url, meta.total);
-  }
-  const cachedLoaded = assetProgress[url] || 0;
-  const headers: Record<string, string> = {};
-  if (cachedLoaded > 0 && meta.total && cachedLoaded < meta.total) {
-    headers["Range"] = `bytes=${cachedLoaded}-`;
-  }
-  const response = await fetch(url, { cache: "force-cache", headers });
-  if (!response.ok) throw new Error(`Asset fetch failed: ${url}`);
-  const name = url.split("/").pop() || "ocr-asset";
-  const total = Number(response.headers.get("Content-Length") ?? meta.total ?? 0);
-  if (Number.isFinite(total) && total > 0) {
-    downloadTracker.totals.set(url, total);
-    ocrTracker.totals.set(url, total);
-    assetMetaCache[url] = { ...meta, total };
-    saveAssetMeta(assetMetaCache);
-  }
-  if (!response.body) {
-    const buffer = await response.arrayBuffer();
-    const loadedBytes = buffer.byteLength + (headers.Range ? cachedLoaded : 0);
-    downloadTracker.loaded.set(url, loadedBytes);
-    ocrTracker.loaded.set(url, loadedBytes);
-    assetProgress[url] = loadedBytes;
-    saveAssetProgress();
-    updateAggregateProgress(`Downloading OCR ${name}`, 0.9, "ocr");
-    return;
-  }
-  const reader = response.body.getReader();
-  let loaded = headers.Range ? cachedLoaded : 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      loaded += value.length;
-      downloadTracker.loaded.set(url, loaded);
-      ocrTracker.loaded.set(url, loaded);
-      assetProgress[url] = loaded;
-      saveAssetProgress();
-      updateAggregateProgress(`Downloading OCR ${name}`, 0.9, "ocr");
-    }
-  }
-  // If we reached total, clear stored resume point for this asset
-  if (downloadTracker.totals.has(url) && loaded >= (downloadTracker.totals.get(url) || 0)) {
-    delete assetProgress[url];
-    saveAssetProgress();
-  }
-};
-
-const warmupOcrAssets = async () => {
-  await Promise.all(
-    OCR_ASSETS.map((asset) =>
-      fetchAssetMeta(asset).then((meta) => {
-        if (meta.total && meta.total > 0) {
-          downloadTracker.totals.set(asset, meta.total);
-          ocrTracker.totals.set(asset, meta.total);
-        }
-      }).catch(() => undefined)
-    )
-  );
-  for (const asset of OCR_ASSETS) {
-    await downloadAsset(asset);
-  }
-  await loadTesseract();
-};
-
 export const warmupModels = async () => {
-  await getTextPipeline();
-  await warmupOcrAssets();
-  const aggregate = getAggregateStats();
-  progressCallback?.(null, 1, aggregate.total, aggregate.total, {
-    phase: "ocr",
-    model: getTrackerStats(modelTracker),
-    ocr: getTrackerStats(ocrTracker)
-  });
-  // clear persisted progress once fully done
-  if (typeof window !== "undefined") {
-    localStorage.removeItem(ASSET_PROGRESS_KEY);
-    localStorage.removeItem(MODEL_PROGRESS_KEY);
-  }
+  // No heavy downloads; just mark ready
+  progressCallback?.("Ready to analyze", 0.9);
+  progressCallback?.(null, 1, 1, 1, { phase: "model" });
 };
 
-const resizeImageFile = (file: File, maxSide = 768): Promise<File> => {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return resolve(file);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            const resized = new File([blob], file.name, { type: blob.type });
-            resolve(resized);
-          } else {
-            resolve(file);
-          }
-        },
-        "image/jpeg",
-        0.78
-      );
-    };
-    img.onerror = () => resolve(file);
-    img.src = URL.createObjectURL(file);
+type GeminiPart = { text: string } | { inlineData: { data: string; mimeType: string } };
+
+const callGemini = async (parts: GeminiPart[], maxTokens = 256) => {
+  if (!GEMINI_KEY) throw new Error("Missing Gemini API key.");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`;
+  debugLog("Gemini request", { url, parts: parts.length, maxTokens });
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: parts.map((p) => ("text" in p ? { text: p.text } : { inline_data: { data: p.inlineData.data, mime_type: p.inlineData.mimeType } }))
+        }
+      ],
+      generationConfig: {
+        temperature: 0.35,
+        maxOutputTokens: maxTokens
+      }
+    })
   });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    debugLog("Gemini response error", res.status, txt);
+    throw new Error(`Gemini error: ${res.status} ${txt}`);
+  }
+  const data = await res.json();
+  debugLog("Gemini response", data);
+  const part = data?.candidates?.[0]?.content?.parts?.[0];
+  const generated = part?.text || part?.generated_text || (typeof data === "string" ? data : null);
+  if (!generated) throw new Error("Gemini returned an empty response.");
+  return generated as string;
+};
+
+const callOpenRouter = async (prompt: string, modelId: string, maxTokens = 256) => {
+  if (!OPENROUTER_KEY) throw new Error("Missing OpenRouter API key.");
+  debugLog("OpenRouter request", { modelId, promptPreview: prompt.slice(0, 120), maxTokens });
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENROUTER_KEY}`,
+      "HTTP-Referer": "https://probx.news",
+      "X-Title": "ProbX News"
+    },
+    body: JSON.stringify({
+      model: modelId,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: maxTokens,
+      temperature: 0.3
+    })
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    debugLog("OpenRouter response error", res.status, txt);
+    throw new Error(`OpenRouter error: ${res.status} ${txt}`);
+  }
+  const data = await res.json();
+  debugLog("OpenRouter response", data);
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenRouter returned an empty response.");
+  return text as string;
 };
 
 const extractDomain = (value: string): string | null => {
@@ -416,18 +115,6 @@ const extractDomain = (value: string): string | null => {
     return url.hostname.replace(/^www\./, "");
   } catch {
     return null;
-  }
-};
-
-const humanTitleFromUrl = (url: string): string => {
-  try {
-    const parsed = new URL(url);
-    const domain = parsed.hostname.replace(/^www\./, "");
-    const lastPart = parsed.pathname.split("/").filter(Boolean).pop() || domain;
-    const words = lastPart.replace(/[-_]/g, " ").replace(/\.[a-zA-Z0-9]+$/, "");
-    return `${domain}: ${words.slice(0, 80)}`.trim();
-  } catch {
-    return url;
   }
 };
 
@@ -443,132 +130,291 @@ const buildSearchQuery = (input: string): string => {
       .join(" ");
     return `${domain} ${pathWords}`.trim();
   }
-  return input.slice(0, 200);
+  return input.slice(0, 220);
 };
 
-const parseRssItems = (xml: string, limit: number): Source[] => {
-  const items: Source[] = [];
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xml, "application/xml");
-  doc.querySelectorAll("item").forEach((item) => {
-    if (items.length >= limit) return;
-    const title = item.querySelector("title")?.textContent || "RSS item";
-    const link = item.querySelector("link")?.textContent || "";
-    const snippet = item.querySelector("description")?.textContent || "Found via RSS";
-    if (link) {
-      items.push({ title, uri: link, snippet });
-    }
-  });
-  return items;
-};
-
-const fetchCrossChecks = async (query: string, limit: number): Promise<Source[]> => {
+const fetchGdeltArticles = async (query: string, limit: number): Promise<Source[]> => {
   try {
-    const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
-    const rssRes = await fetch(rssUrl);
-    if (rssRes.ok) {
-      const rssBody = await rssRes.text();
-      const rssItems = parseRssItems(rssBody, limit);
-      if (rssItems.length) return rssItems.slice(0, limit);
-    }
-
-    const googleUrl = `https://r.jina.ai/http://www.google.com/search?q=${encodeURIComponent(query)}`;
-    const res = await fetch(googleUrl);
-    if (!res.ok) throw new Error(`Cross-check fetch failed: ${res.status}`);
-    const body = await res.text();
-    let matches = Array.from(body.matchAll(/\/url\?q=([^"&\s]+)/g));
-    if (matches.length === 0) {
-    const fallbackUrl = `https://r.jina.ai/https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const fallbackRes = await fetch(fallbackUrl);
-    const fallbackBody = await fallbackRes.text();
-    matches = Array.from(fallbackBody.matchAll(/https:\/\/duckduckgo\.com\/l\/\?kh=-1&uddg=([^"&\s]+)/g));
-  }
-    const sources: Source[] = [];
-    const seen = new Set<string>();
-    for (const m of matches) {
-      const decoded = decodeURIComponent(m[1]);
-      if (seen.has(decoded)) continue;
-      seen.add(decoded);
-      sources.push({
-        title: humanTitleFromUrl(decoded),
-        uri: decoded,
-        snippet: "Found via web search mirror for corroboration."
-      });
-      if (sources.length >= limit) break;
-    }
-    return sources;
+    const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&maxrecords=${limit}&format=json&sort=HybridRel:Recent:100`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`GDELT ${res.status}`);
+    const data = await res.json();
+    const articles = Array.isArray(data?.articles) ? data.articles : [];
+    return articles
+      .map((a: any) => ({
+        title: a.title || a.url || "GDELT source",
+        uri: a.url,
+        snippet: a.excerpt || a.title || a.url
+      }))
+      .filter((a: Source) => a.uri)
+      .slice(0, limit);
   } catch (e) {
-    console.warn("Cross-check lookup skipped:", e);
+    console.warn("GDELT fetch failed", e);
     return [];
   }
 };
 
-const scoreToVerdict = (label: string, score: number): { verdict: Verdict; confidence: number } => {
-  const lower = label.toLowerCase();
-  if (lower.includes("real") || lower.includes("authentic") || lower.includes("news")) {
-    return { verdict: Verdict.REAL, confidence: Math.max(50, Math.round(score * 100)) };
+const fetchGoogleNewsRss = async (query: string, limit: number): Promise<Source[]> => {
+  try {
+    const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+    const res = await fetch(rssUrl);
+    if (!res.ok) throw new Error(`RSS ${res.status}`);
+    const xml = await res.text();
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    const items = Array.from(doc.querySelectorAll("item")).slice(0, limit);
+    return items
+      .map((item) => ({
+        title: item.querySelector("title")?.textContent || "Google News",
+        uri: item.querySelector("link")?.textContent || "",
+        snippet: item.querySelector("description")?.textContent || "Found via Google News RSS"
+      }))
+      .filter((s) => s.uri);
+  } catch (e) {
+    console.warn("Google News RSS failed", e);
+    return [];
   }
-  if (lower.includes("fake") || lower.includes("ai") || lower.includes("manipulated")) {
-    return { verdict: Verdict.FAKE, confidence: Math.max(40, Math.round(score * 100)) };
-  }
-  if (lower.includes("satire") || lower.includes("meme")) {
-    return { verdict: Verdict.SATIRE, confidence: Math.max(35, Math.round(score * 100)) };
-  }
-  return { verdict: Verdict.INCONCLUSIVE, confidence: Math.round(score * 100) };
 };
 
-const deriveEthics = (harmLabel: string) => {
-  const l = harmLabel.toLowerCase();
-  if (l.includes("hate") || l.includes("violence") || l.includes("racism")) return "bad" as const;
-  if (l.includes("provocative") || l.includes("polarizing")) return "moderate" as const;
-  return "good" as const;
-};
-
-const TRUSTED = ["bbc.co.uk", "reuters.com", "apnews.com", "theguardian.com", "bloomberg.com", "nytimes.com", "indiatoday.in", "aajtak.in", "ndtv.com", "washingtonpost.com"];
-const FLAGGED = ["blogspot", "wordpress", "medium.com/p", "rumor", "gossip", "fake", "hoax"];
-const REGIONAL_TRUSTED = [
-  "aljazeera.com",
-  "hindustantimes.com",
-  "thehindu.com",
-  "straitstimes.com",
-  "globalnews.ca",
-  "abc.net.au",
-  "france24.com",
-  "dw.com"
-];
-
-const getYearFromUrl = (url: string): number | null => {
-  const match = url.match(/\/(20\d{2}|19\d{2})\//);
-  if (match) return parseInt(match[1], 10);
-  return null;
-};
-
-const adjustConfidenceWithSources = (base: number, sources: Source[], userDomain?: string) => {
-  let score = base;
-  const domains = sources.map((s) => extractDomain(s.uri)).filter(Boolean) as string[];
-  const trustedHit = domains.find((d) => TRUSTED.some((t) => d.endsWith(t)));
-  const regionalHit = domains.find((d) => REGIONAL_TRUSTED.some((t) => d.endsWith(t)));
-  const flaggedHit = domains.find((d) => FLAGGED.some((t) => d.includes(t)));
-  if (trustedHit) score += 10;
-  if (regionalHit) score += 5;
-  if (flaggedHit) score -= 8;
-  if (userDomain && trustedHit && trustedHit !== userDomain) score += 5;
-  if (domains.length >= 4) score += 5;
-
-  // Recency adjustment based on URL year tokens
-  const currentYear = new Date().getFullYear();
-  const years = sources
-    .map((s) => getYearFromUrl(s.uri))
-    .filter((y): y is number => !!y);
-  if (years.length) {
-    const avgYear = years.reduce((a, b) => a + b, 0) / years.length;
-    const diff = currentYear - avgYear;
-    if (diff > 6) score -= 6;
-    else if (diff > 3) score -= 3;
-    else if (diff >= 0 && diff <= 1) score += 3;
+const fetchCombinedSources = async (query: string, limit: number): Promise<Source[]> => {
+  const gdelt = await fetchGdeltArticles(query, limit);
+  if (gdelt.length >= limit) return gdelt.slice(0, limit);
+  const rss = await fetchGoogleNewsRss(query, limit - gdelt.length);
+  const merged = [...gdelt, ...rss];
+  const seen = new Set<string>();
+  const deduped: Source[] = [];
+  for (const src of merged) {
+    const key = src.uri.split("?")[0];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(src);
+    if (deduped.length >= limit) break;
   }
+  const socials = buildSocialSearches(query);
+  return [...deduped, ...socials];
+};
 
-  return Math.min(95, Math.max(5, Math.round(score)));
+const fetchArticleText = async (url: string): Promise<string> => {
+  try {
+    const safeUrl = url.startsWith("http") ? url : `https://${url}`;
+    const res = await fetch(`https://r.jina.ai/${safeUrl}`, { method: "GET" });
+    if (!res.ok) return "";
+    const body = await res.text();
+    return body.slice(0, 4000);
+  } catch {
+    return "";
+  }
+};
+
+const buildSocialSearches = (query: string): Source[] => {
+  const encoded = encodeURIComponent(query);
+  return [
+    {
+      title: "Social search: X/Twitter",
+      uri: `https://x.com/search?q=${encoded}&f=live`,
+      snippet: "Open live discussions on X."
+    },
+    {
+      title: "Social search: Reddit",
+      uri: `https://www.reddit.com/search/?q=${encoded}&t=week`,
+      snippet: "Community threads on Reddit."
+    }
+  ];
+};
+
+const detectSatireOrJoke = (text: string): boolean => {
+  const t = text.toLowerCase();
+  const cues = [
+    "joke",
+    "just kidding",
+    "lol",
+    "😂",
+    "🤣",
+    "satire",
+    "parody",
+    "world is flat",
+    "flat earth",
+    "trust me bro"
+  ];
+  return cues.some((c) => t.includes(c));
+};
+
+const detectHarmfulContent = (text: string) => {
+  const t = text.toLowerCase();
+  const hostileWords = [
+    "kill",
+    "destroy",
+    "eliminate",
+    "hate",
+    "exterminate",
+    "genocide",
+    "terror",
+    "bomb",
+    "violence"
+  ];
+  const groupMarkers = [
+    "religion",
+    "race",
+    "ethnic",
+    "gender",
+    "women",
+    "men",
+    "lgbt",
+    "gay",
+    "trans",
+    "country",
+    "people",
+    "community",
+    "refugee",
+    "migrant",
+    "immigrant"
+  ];
+  const flagged = hostileWords.some((w) => t.includes(w)) && groupMarkers.some((w) => t.includes(w));
+  if (!flagged) {
+    return {
+      flagged: false,
+      emotion: "neutral",
+      harm: "No direct harmful language detected.",
+      ethics: "moderate" as AnalysisResult["ethics"],
+      reminder: ""
+    };
+  }
+  return {
+    flagged: true,
+    emotion: "aggressive",
+    harm: "Harmful or hateful language detected. This content may target a protected group.",
+    ethics: "bad" as AnalysisResult["ethics"],
+    reminder: "Please avoid harmful or hateful remarks. Rephrase respectfully and fact-check with care."
+  };
+};
+
+const clampConfidence = (raw: number, sources: number, satiric: boolean, harmful: boolean) => {
+  let score = Math.max(0, Math.min(100, raw));
+  if (sources === 0) score = Math.min(score, 40);
+  if (satiric) score = Math.min(score, 30);
+  if (harmful) score = Math.min(score, 60);
+  return Math.max(5, Math.round(score));
+};
+
+const looksImprobable = (text: string) => {
+  const cues = [
+    "cat protest",
+    "dog protest",
+    "cats are flying",
+    "dogs are flying",
+    "flying cats",
+    "flying dogs",
+    "alien",
+    "unicorn",
+    "magic",
+    "flat earth",
+    "time travel"
+  ];
+  const lower = text.toLowerCase();
+  return cues.some((c) => lower.includes(c));
+};
+
+const STOPWORDS = new Set([
+  "the","is","are","a","an","and","or","of","in","on","at","to","for","with","by","from","about","as","that","this","these","those","today","now","yesterday","tomorrow","was","were","be","been","will","would","could","should","can"
+]);
+
+const extractKeywords = (text: string) => {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
+};
+
+const filterRelevantSources = (claim: string, sources: Source[]) => {
+  const claimKeywords = extractKeywords(claim);
+  if (!claimKeywords.length) return [];
+  const claimSet = new Set(claimKeywords);
+  return sources.filter((src) => {
+    const text = `${src.title} ${src.snippet || ""}`.toLowerCase();
+    const overlap = Array.from(claimSet).filter((k) => text.includes(k));
+    return overlap.length >= 1;
+  });
+};
+
+const parseVerdict = (val: string): Verdict => {
+  const v = val?.toLowerCase() || "";
+  if (v.includes("real") || v.includes("support") || v.includes("true")) return Verdict.REAL;
+  if (v.includes("fake") || v.includes("false") || v.includes("refute")) return Verdict.FAKE;
+  if (v.includes("satire")) return Verdict.SATIRE;
+  return Verdict.INCONCLUSIVE;
+};
+
+const fileToBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        const base64 = result.split(",").pop() || "";
+        resolve(base64);
+      } else {
+        reject(new Error("Unable to read file"));
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+const getLocalOcr = async () => {
+  if (!ocrPipeline) {
+    ocrPipeline = import("@xenova/transformers").then(({ pipeline }) =>
+      pipeline("image-to-text", "Xenova/trocr-small-printed")
+    );
+  }
+  return ocrPipeline;
+};
+
+const runLocalOcr = async (file: File) => {
+  try {
+    const pipe = await getLocalOcr();
+    const result = await pipe(file);
+    const best = Array.isArray(result) ? result[0] : result;
+    const text = (best?.generated_text || best?.text || "").toString().trim();
+    return text.slice(0, 800);
+  } catch (err) {
+    debugLog("Local OCR failed", err);
+    return "";
+  }
+};
+
+const extractImageText = async (file: File): Promise<{ text: string; source: string }> => {
+  if (GEMINI_KEY) {
+    try {
+      const base64 = await fileToBase64(file);
+      const prompt = "Read any text visible in this image, then return just the text you see.";
+      const response = await callGemini(
+        [
+          { text: prompt },
+          { inlineData: { data: base64, mimeType: file.type || "image/jpeg" } }
+        ],
+        120
+      );
+      const cleaned = response.slice(0, 800).trim();
+      if (cleaned) return { text: cleaned, source: "Gemini" };
+    } catch (err) {
+      debugLog("Gemini OCR failed, falling back", err);
+    }
+  }
+  const fallback = await runLocalOcr(file);
+  return { text: fallback, source: "Local OCR" };
+};
+
+const buildPrompt = (claim: string, sourceSnippets: { title: string; snippet: string }[]) => {
+  const lines = [
+    "You are a concise fact-checker. Return JSON only:",
+    '{ "verdict": "REAL|FAKE|INCONCLUSIVE|SATIRE", "confidence": 0-100, "summary": "one sentence" }',
+    "",
+    `Claim: ${claim.slice(0, 800)}`,
+    "",
+    "Source snippets:",
+    ...sourceSnippets.map((s, i) => `${i + 1}. ${s.title}: ${s.snippet.slice(0, 240)}`)
+  ];
+  return lines.join("\n");
 };
 
 export const analyzeContent = async (
@@ -577,201 +423,206 @@ export const analyzeContent = async (
   modelChoice: ModelChoice,
   mode: AnalysisMode
 ): Promise<AnalysisResult> => {
-  let verdict = Verdict.INCONCLUSIVE;
-  let confidenceScore = 50;
-  let agentLogs: AgentLogEntry[] = [];
-  let userSource: Source | null = null;
-  const sources: Source[] = [
-  ];
-
-  let emotion = "neutral";
-  let harmSignals = "None detected";
-  let ethics: "good" | "moderate" | "bad" = "good";
+  ensureKey();
+  const sources: Source[] = [];
+  const agentLogs: AgentLogEntry[] = [];
+  let claimText = "";
+  let satiric = false;
+  let safetyFlag = {
+    flagged: false,
+    emotion: "neutral",
+    harm: "Not evaluated.",
+    ethics: "moderate" as AnalysisResult["ethics"],
+    reminder: ""
+  };
+  let userSourceAdded = false;
 
   if (type === InputType.TEXT && typeof input === "string") {
-    const domain = extractDomain(input);
+    claimText = input.trim();
+    const domain = extractDomain(claimText);
     if (domain) {
-      userSource = {
-        title: `User source: ${domain}`,
-        uri: input,
-        snippet: "Submitted link under review."
-      };
-      sources.push(userSource);
-    }
-    const classifier = await getTextPipeline();
-    const labels = ["real journalism", "fake news", "satire", "inconclusive"];
-    const output = await classifier(input, labels);
-    const best = Array.isArray(output) ? output[0] : output;
-    const { verdict: mappedVerdict, confidence } = scoreToVerdict(best.labels[0], best.scores[0]);
-    verdict = mappedVerdict;
-    confidenceScore = confidence;
-    agentLogs = best.labels.slice(0, 4).map((label: string, idx: number) => ({
-      action: "Zero-shot classification",
-      findings: `${label} (${Math.round(best.scores[idx] * 100)}%)`,
-      source: "bart-large-mnli"
-    }));
-    const emotionLabels = ["provocative", "threatening", "anger", "disgust", "joy", "fear", "neutral"];
-    const emoOutput = await classifier(input, emotionLabels);
-    const emoBest = Array.isArray(emoOutput) ? emoOutput[0] : emoOutput;
-    emotion = emoBest.labels[0];
-
-    const harmLabels = ["racism", "violence", "hate speech", "neutral reporting", "harassment"];
-    const harmOutput = await classifier(input, harmLabels);
-    const harmBest = Array.isArray(harmOutput) ? harmOutput[0] : harmOutput;
-    harmSignals = `${harmBest.labels[0]} (${Math.round(harmBest.scores[0] * 100)}%)`;
-    ethics = deriveEthics(harmBest.labels[0]);
-
-    const targetSources = MODE_SETTINGS[mode].sources;
-    let crossChecks = await fetchCrossChecks(buildSearchQuery(input), targetSources);
-    if (crossChecks.length < targetSources) {
-      const headlineQuery = input.slice(0, 120);
-      const fallback = await fetchCrossChecks(headlineQuery, targetSources - crossChecks.length);
-      crossChecks = [...crossChecks, ...fallback];
-    }
-    if (!crossChecks.length) {
+      sources.push({ title: `User source: ${domain}`, uri: claimText, snippet: "Submitted link under review." });
+      userSourceAdded = true;
+    } else if (claimText) {
       sources.push({
-        title: "Analyzing submitted link",
-        uri: typeof input === "string" ? input : "submitted-text",
-        snippet: "Still searching for corroborating sources; analysis continues."
+        title: "User statement",
+        uri: claimText.slice(0, 200),
+        snippet: "User-provided text"
       });
-    } else {
-      sources.push(...crossChecks);
+      userSourceAdded = true;
     }
-    agentLogs.push({
-      action: "Web cross-check",
-      findings: crossChecks.length
-        ? `Collected ${crossChecks.length}/${targetSources} corroborating hits.`
-        : "No external sources yet; continuing analysis of submitted link.",
-      source: "duckduckgo (via r.jina.ai)"
-    });
-    const baseScore = best.scores[0] * 100;
-    confidenceScore = adjustConfidenceWithSources(baseScore, crossChecks, domain || undefined);
-    agentLogs.push({
-      action: "Confidence synthesis",
-      findings: crossChecks.length
-        ? `Adjusted to ${confidenceScore}% using ${crossChecks.length} sources.`
-        : `Held at ${confidenceScore}% while monitoring the submitted link for matches.`,
-      source: "fusion"
-    });
-  } else if (type === InputType.IMAGE && input instanceof File) {
-    const resized = await resizeImageFile(input);
-    const tesseract = await loadTesseract();
-    progressCallback?.("Reading text from image (OCR)", 0.05);
-    const ocrResult = await tesseract.recognize(resized, "eng", {
-      workerPath: "/tessdata/worker.min.js",
-      corePath: "/tessdata/tesseract-core.wasm.js",
-      langPath: "/tessdata",
-      logger: (m: any) => {
-        if (m?.status === "recognizing text" && typeof m.progress === "number") {
-          progressCallback?.("Reading text from image (OCR)", Math.min(0.95, m.progress), m.loaded, m.total);
-        }
-      }
-    }).catch((e: any) => {
-      console.warn("OCR failed", e);
-      return { data: { text: "" } } as any;
-    });
-    const extractedText = (ocrResult as any)?.data?.text?.trim() || "";
-    agentLogs.push({
-      action: "OCR",
-      findings: extractedText ? `Extracted text (${Math.min(120, extractedText.length)} chars)` : "No text detected in image",
-      source: "tesseract.js"
-    });
+  }
 
-    if (extractedText) {
-      const classifier = await getTextPipeline();
-      const labels = ["real journalism", "fake news", "satire", "inconclusive"];
-      const output = await classifier(extractedText, labels);
-      const best = Array.isArray(output) ? output[0] : output;
-      const { verdict: mappedVerdict, confidence } = scoreToVerdict(best.labels[0], best.scores[0]);
-      verdict = mappedVerdict;
-      confidenceScore = confidence;
-      agentLogs.push({
-        action: "Zero-shot classification (OCR text)",
-        findings: `${best.labels[0]} (${Math.round(best.scores[0] * 100)}%)`,
-        source: "bart-large-mnli"
-      });
-    } else {
-      verdict = Verdict.INCONCLUSIVE;
-      confidenceScore = 40;
-    }
-
-    emotion = "neutral (image)";
-    harmSignals = "OCR-based: no strong hate/violence cues detected.";
-    ethics = "moderate";
-
-    const targetSources = MODE_SETTINGS[mode].sources;
-    const crossChecks = await fetchCrossChecks(extractedText || "news image authenticity check", targetSources);
-    if (!crossChecks.length) {
-      sources.push({
-        title: "Analyzing uploaded image",
-        uri: "image://ocr-only",
-        snippet: "Still searching for corroborating sources; analysis continues."
-      });
-    } else {
-      sources.push(...crossChecks);
-    }
+  if (type === InputType.IMAGE && input instanceof File) {
+    const { text, source } = await extractImageText(input);
+    claimText = text || "No text detected in image.";
     agentLogs.push({
-      action: "Web cross-check",
-      findings: crossChecks.length
-        ? `Collected ${crossChecks.length}/${targetSources} corroborating hits.`
-        : "No OCR-matching sources yet; reviewing extracted text only.",
-      source: "google news rss + r.jina.ai"
+      action: "Image analysis",
+      findings: text ? `Extracted text from image using ${source}.` : "Image contained no readable text.",
+      source
     });
-    const baseScore = confidenceScore;
-    confidenceScore = adjustConfidenceWithSources(baseScore, crossChecks);
-    agentLogs.push({
-      action: "Confidence synthesis",
-      findings: crossChecks.length
-        ? `Adjusted to ${confidenceScore}% using ${crossChecks.length} sources.`
-        : `Held at ${confidenceScore}% while monitoring for matches.`,
-      source: "fusion"
+    sources.push({
+      title: "User image upload",
+      uri: "image://uploaded",
+      snippet: text ? text.slice(0, 200) : "Image without readable text."
+    });
+    userSourceAdded = true;
+  }
+
+  const targetSources = MODE_SETTINGS[mode].sources;
+  const query = buildSearchQuery(claimText || "news verification");
+  debugLog("Source query", { query, targetSources });
+  let crossSources = await fetchCombinedSources(query, targetSources);
+  if (!crossSources.length && claimText.length > 30) {
+    crossSources = await fetchCombinedSources(claimText.slice(0, 80), targetSources);
+  }
+  let filteredSources = crossSources.filter((s) => !s.title.toLowerCase().includes("social search"));
+  if (claimText) {
+    filteredSources = filterRelevantSources(claimText, filteredSources);
+  }
+  const socialSources = crossSources.filter((s) => s.title.toLowerCase().includes("social search"));
+  const realSourceCount = filteredSources.length;
+  sources.push(...crossSources);
+  agentLogs.push({
+    action: "Source gathering",
+    findings: realSourceCount
+      ? `Fetched ${realSourceCount}/${targetSources} relevant news hits (GDELT + Google News).`
+      : "No corroborating articles found; relying on model only.",
+    source: "GDELT + RSS"
+  });
+
+  satiric = detectSatireOrJoke(claimText);
+  safetyFlag = detectHarmfulContent(claimText);
+
+  const snippets: { title: string; snippet: string }[] = [];
+  for (const src of filteredSources.slice(0, 3)) {
+    const text = await fetchArticleText(src.uri);
+    if (text) snippets.push({ title: src.title, snippet: text });
+  }
+  if (!snippets.length && claimText) {
+    snippets.push({ title: "Claim text", snippet: claimText.slice(0, 500) });
+  }
+  if (!userSourceAdded && claimText) {
+    sources.unshift({
+      title: "User statement",
+      uri: claimText.slice(0, 200),
+      snippet: "User-provided text"
     });
   }
 
-const summary =
-    verdict === Verdict.REAL
-      ? "Model signals lean toward authentic reporting."
-      : verdict === Verdict.FAKE
-      ? "Model signals lean toward fabricated or AI-like content."
-      : verdict === Verdict.SATIRE
-      ? "Tone and visuals suggest satirical or meme-style content."
-      : "Signals are mixed; treat with caution.";
+  const prompt = buildPrompt(claimText || "No claim text detected", snippets);
+  const preferConfig = MODEL_CONFIG[modelChoice] || MODEL_CONFIG[GEMINI_MODEL];
+  let modelUsed: ModelChoice = modelChoice;
+  let modelOutput: string;
+
+  const tryOpenRouter = async (fallback?: ModelChoice) => {
+    const target = MODEL_CONFIG[fallback || "openrouter-llama"];
+    if (!target || target.provider !== "openrouter") throw new Error("OpenRouter config missing.");
+    const output = await callOpenRouter(prompt, target.modelId, 200);
+    modelUsed = fallback || "openrouter-llama";
+    return output;
+  };
+
+  try {
+    debugLog("Model selection", { requested: modelChoice, provider: preferConfig.provider });
+    if (preferConfig.provider === "gemini") {
+      modelOutput = await callGemini([{ text: prompt }], 200);
+      modelUsed = "gemini-1.5-flash";
+    } else {
+      modelOutput = await tryOpenRouter(modelChoice);
+    }
+  } catch (err) {
+    // Fallback logic: switch provider if available
+    if (preferConfig.provider === "gemini" && OPENROUTER_KEY) {
+      modelOutput = await tryOpenRouter("openrouter-llama");
+    } else if (preferConfig.provider === "openrouter" && GEMINI_KEY) {
+      modelOutput = await callGemini([{ text: prompt }], 200);
+      modelUsed = "gemini-1.5-flash";
+    } else if (preferConfig.provider === "openrouter" && OPENROUTER_KEY) {
+      modelOutput = await tryOpenRouter("openrouter-llama");
+    } else {
+      debugLog("Model fallback failed", err);
+      throw err;
+    }
+  }
+
+  let verdict = Verdict.INCONCLUSIVE;
+  let confidenceScore = 50;
+  let summary = "Signals are mixed; more evidence needed.";
+
+  try {
+    const jsonText = modelOutput.match(/\{[\s\S]*\}/)?.[0] || modelOutput;
+    const parsed = JSON.parse(jsonText);
+    verdict = parseVerdict(parsed.verdict);
+    confidenceScore = Math.min(100, Math.max(0, Math.round(parsed.confidence ?? 50)));
+    summary = typeof parsed.summary === "string" ? parsed.summary : summary;
+  } catch {
+    debugLog("JSON parse fallback", modelOutput);
+    // fallback parse
+    verdict = parseVerdict(modelOutput);
+    confidenceScore = modelOutput.toLowerCase().includes("high") ? 80 : 55;
+    summary = modelOutput.slice(0, 200);
+  }
+
+  agentLogs.push({
+    action: "Gemini verdict",
+    findings: `${verdict} (${confidenceScore}%)`,
+    source: modelUsed
+  });
+
+  if (satiric && verdict === Verdict.REAL) {
+    verdict = Verdict.SATIRE;
+  }
+  if (satiric && !summary.toLowerCase().includes("satire")) {
+    summary = "This reads like satire or a joke; treat as non-factual content.";
+  }
+  if (realSourceCount === 0 || looksImprobable(claimText)) {
+    verdict = Verdict.INCONCLUSIVE;
+    summary = "No credible sources found. This claim needs more evidence.";
+  }
+  const confidenceAdjusted = clampConfidence(confidenceScore, realSourceCount, satiric, safetyFlag.flagged || looksImprobable(claimText));
+
+  if (safetyFlag.flagged) {
+    agentLogs.push({
+      action: "Safety warning",
+      findings: safetyFlag.harm,
+      source: "Moderation"
+    });
+    if (!summary.toLowerCase().includes("harmful")) {
+      summary = `${summary} ${safetyFlag.reminder}`;
+    }
+  }
+
+  const shouldShowDetail =
+    mode === "deep-analytic" &&
+    !satiric &&
+    (sources.some((s) => !s.title.toLowerCase().includes("social search")) || realSourceCount > 0);
+
+  const detailedMarkdown =
+    shouldShowDetail
+      ? [
+          "## What was used",
+          `- Model: ${modelUsed}`,
+          "- Sources: GDELT doc API + Google News RSS + r.jina.ai page text",
+          "",
+          "## Notes",
+          "- Verdict is heuristic; confirm important claims with primary sources.",
+          "- Network/API limits may affect responses; retry if it looks off."
+        ].join("\n")
+      : "Detailed analysis is available in Deep Analytic Mode.";
 
   return {
     verdict,
-    confidenceScore,
+    confidenceScore: confidenceAdjusted,
     summary,
-    detailedMarkdown:
-      mode === "deep-analytic"
-        ? [
-            "## What was used",
-            "- Zero-shot text classifier: bart-large-mnli",
-            "- Zero-shot image classifier: clip-vit-base-patch32",
-            "- Web corroboration via Google/Bing mirrors (r.jina.ai)",
-            "",
-            "## Tone and intent",
-            `- Dominant emotion signal: ${emotion}`,
-            "- Detects if the author is provoking, threatening, or calming readers.",
-            "",
-            "## Harm & safety",
-            `- Harm signals: ${harmSignals}`,
-            "- Flags racism, violence, hate speech tendencies if present.",
-            "",
-            "## Ethics and framing",
-            `- Ethics rating: ${ethics}`,
-            "- Assesses whether the article pressures, frightens, or misleads readers.",
-            "",
-            "## Notes",
-            "- First load may take longer while the model downloads.",
-            "- This is a heuristic signal, not a definitive fact check. Cross-verify important claims."
-          ].join("\n")
-        : "Detailed analysis is available in Deep Analytic Mode.",
+    detailedMarkdown,
     sources,
     agentLogs,
-    emotion,
-    harmSignals,
-    ethics,
-    modelUsed: modelChoice,
-    modeUsed: mode
+    emotion: safetyFlag.flagged ? safetyFlag.emotion : satiric ? "playful" : "neutral",
+    harmSignals: safetyFlag.flagged ? safetyFlag.harm : "No direct harmful language detected.",
+    ethics: safetyFlag.ethics,
+    modelUsed,
+    modeUsed: mode,
+    shouldShowDetail
   };
 };

@@ -1,27 +1,39 @@
 import React, { useEffect, useState } from 'react';
+import { SocialIcon } from 'react-social-icons';
 
 interface Props {
   etaSeconds?: number;
 }
 
 const LOADING_STEPS = [
-  "Loading free AI models...",
-  "Scanning language tone...",
-  "Checking domain reputation...",
-  "Inspecting image clues...",
-  "Compiling fact sheet...",
-  "Scoring credibility...",
-  "Generating verdict..."
+  "Scanning recent headlines...",
+  "Looking for matching reports...",
+  "Comparing wording across sources...",
+  "Reading image text if present...",
+  "Cross-checking social chatter...",
+  "Summarizing what was found...",
+  "Scoring credibility..."
+];
+
+const CENTER_URLS = [
+  "https://google.com",
+  "https://duckduckgo.com",
+  "https://reddit.com",
+  "https://x.com",
+  "https://news.google.com",
+  "https://rss.com"
 ];
 
 export const AnalysisLoader: React.FC<Props> = ({ etaSeconds = 60 }) => {
   const [stepIndex, setStepIndex] = useState(0);
   const [remaining, setRemaining] = useState(etaSeconds);
+  const [iconIndex, setIconIndex] = useState(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
       setStepIndex((prev) => (prev + 1) % LOADING_STEPS.length);
-    }, 1500); // Change step every 1.5s
+      setIconIndex((prev) => (prev + 1) % CENTER_URLS.length);
+    }, 1400); // Change step every 1.4s
     return () => clearInterval(interval);
   }, []);
 
@@ -37,7 +49,12 @@ export const AnalysisLoader: React.FC<Props> = ({ etaSeconds = 60 }) => {
   }, []);
 
   return (
-    <div className="flex flex-col items-center justify-center w-full py-12">
+    <div className="relative flex flex-col items-center justify-center w-full py-12 overflow-hidden">
+      <div className="absolute inset-0 pointer-events-none loader-aurora" />
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="orb orb-one" />
+        <div className="orb orb-two" />
+      </div>
       {/* Animated Loader */}
       <div className="relative w-48 h-48 mb-8">
         {/* Outer Ring */}
@@ -46,7 +63,9 @@ export const AnalysisLoader: React.FC<Props> = ({ etaSeconds = 60 }) => {
         <div className="absolute inset-0 border-4 border-blue-500 rounded-full border-t-transparent animate-spin-slow"></div>
         {/* Inner Pulse */}
         <div className="absolute inset-4 bg-blue-50 rounded-full animate-pulse flex items-center justify-center">
-           <div className="text-4xl">🤖</div>
+           <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center">
+             <SocialIcon url={CENTER_URLS[iconIndex]} style={{ height: 48, width: 48 }} bgColor="transparent" fgColor="currentColor" />
+           </div>
         </div>
       </div>
 

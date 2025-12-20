@@ -15,90 +15,30 @@ const loadAnalyzer = () => {
 };
 import appMark from './assets/imgs/logo_only.png';
 
-const formatBytes = (val?: number) => {
-  if (!val && val !== 0) return null;
-  const units = ["B", "KB", "MB", "GB"];
-  let v = val;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v = v / 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
-};
-
-const formatSeconds = (sec?: number | null) => {
-  if (!sec || sec < 0) return null;
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
-};
-
 type BootScreenProps = {
-  downloadState: 'idle' | 'active' | 'success' | 'error';
-  downloadMsg: string | null;
-  downloadDetail: string | null;
-  downloadPct: number;
-  downloadBytes: { received?: number; total?: number };
-  downloadSegments: {
-    phase?: "model" | "ocr";
-    model?: { received?: number; total?: number };
-    ocr?: { received?: number; total?: number };
-  };
-  downloadEta: number | null;
+  status: 'connecting' | 'error';
+  message: string | null;
+  detail?: string | null;
   onRetry: () => void;
 };
 
-const BootScreen: React.FC<BootScreenProps> = ({
-  downloadState,
-  downloadMsg,
-  downloadDetail,
-  downloadPct,
-  downloadBytes,
-  downloadSegments,
-  downloadEta,
-  onRetry
-}) => {
+const BootScreen: React.FC<BootScreenProps> = ({ status, message, detail, onRetry }) => {
   const [step, setStep] = useState(0);
   const steps = [
-    "Configuring AI models",
-    "Checking cross-check channels",
-    "Arming fake news radar",
-    "Loading home screen"
+    "setting up server",
+    "Looking for news sources",
+    "Getting things ready",
+    "Almost there"
   ];
 
   useEffect(() => {
-    if (downloadState === 'active') {
-      setStep(0);
-      return;
-    }
     const interval = setInterval(() => {
       setStep((prev) => (prev + 1) % steps.length);
-    }, 750);
+    }, 900);
     return () => clearInterval(interval);
-  }, [downloadState, steps.length]);
+  }, []);
 
-  const downloadBarColor = downloadState === 'success' ? 'bg-green-400' : downloadState === 'error' ? 'bg-red-400' : 'bg-blue-400';
-  const received = formatBytes(downloadBytes.received);
-  const total = formatBytes(downloadBytes.total);
-  const percentText = `${Math.min(100, downloadPct)}%`;
-  const detailLine = downloadState === 'error'
-    ? downloadDetail || "Connection lost. Tap retry to resume."
-    : null;
-  const etaText = formatSeconds(downloadEta);
-  const modelText = (() => {
-    const received = formatBytes(downloadSegments.model?.received);
-    const total = formatBytes(downloadSegments.model?.total);
-    if (!received && !total) return null;
-    return `Model: ${received || "0 B"}${total ? ` of ${total}` : ""}`;
-  })();
-  const ocrText = (() => {
-    const received = formatBytes(downloadSegments.ocr?.received);
-    const total = formatBytes(downloadSegments.ocr?.total);
-    if (!received && !total) return null;
-    return `OCR: ${received || "0 B"}${total ? ` of ${total}` : ""}`;
-  })();
+  const showRetry = status === 'error';
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center relative overflow-hidden">
@@ -113,54 +53,18 @@ const BootScreen: React.FC<BootScreenProps> = ({
           </div>
         </div>
         <div className="space-y-2">
-          <p className="text-lg font-semibold">Launching ProbX engine</p>
-          <p className="text-sm text-slate-300">{steps[step]}</p>
+          <p className="text-lg font-semibold">Launching ProbX</p>
+          <p className="text-sm text-slate-300">{message || steps[step]}</p>
+          {detail && <p className="text-xs text-slate-400">{detail}</p>}
         </div>
-      </div>
-      <div className="absolute bottom-8 left-0 right-0 px-6">
-        <div className="max-w-xl mx-auto bg-slate-900/70 border border-white/10 rounded-2xl p-4 backdrop-blur-xl shadow-lg">
-          <div className="flex items-center justify-between text-xs uppercase tracking-widest text-slate-400">
-            <span>
-              {downloadState === 'error'
-                ? 'Download paused'
-                : downloadSegments.phase === 'ocr'
-                ? 'Downloading OCR assets'
-                : 'Downloading models'}
-            </span>
-            <span className="text-slate-300">Progress: {percentText}</span>
-          </div>
-          <div className="w-full bg-slate-800/80 h-2.5 rounded-full mt-2 overflow-hidden">
-            <div
-              className={`h-2.5 transition-all ${downloadBarColor} bar-stripes`}
-              style={{ width: `${Math.min(100, downloadPct)}%` }}
-              aria-label={`Download progress ${Math.min(100, downloadPct)} percent`}
-            />
-          </div>
-          <div className="flex items-center justify-between mt-2 text-xs text-slate-300">
-            <span>{downloadMsg || "Preparing download..."}</span>
-            {etaText ? <span>ETA: {etaText}</span> : <span aria-hidden="true">&nbsp;</span>}
-          </div>
-          {(modelText || ocrText) && (
-            <div className="flex flex-col gap-1 mt-2 text-[11px] text-slate-400">
-              {modelText && <span>{modelText}</span>}
-              {ocrText && <span>{ocrText}</span>}
-            </div>
-          )}
-          {detailLine && <p className="text-[11px] text-slate-400 mt-1">{detailLine}</p>}
-          <div className="mt-2 text-[11px] text-slate-400 space-y-1">
-            <p>One-time install. Files stay cached for offline use.</p>
-            <p>If interrupted, the download resumes automatically.</p>
-            {etaText && <p>Estimated time remaining: {etaText}</p>}
-          </div>
-          {downloadState === 'error' && (
-            <button
-              className="mt-3 w-full text-xs font-semibold uppercase tracking-widest bg-red-500/20 text-red-200 py-2 rounded-lg border border-red-400/40 hover:bg-red-500/30 transition"
-              onClick={onRetry}
-            >
-              Retry download
-            </button>
-          )}
-        </div>
+        {showRetry && (
+          <button
+            className="mt-2 text-sm font-semibold uppercase tracking-widest bg-white/10 text-white py-2 px-4 rounded-lg border border-white/20 hover:bg-white/15 transition"
+            onClick={onRetry}
+          >
+            Retry
+          </button>
+        )}
       </div>
     </div>
   );
@@ -172,27 +76,28 @@ const App: React.FC = () => {
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number>(60);
-  const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
-  const [downloadPct, setDownloadPct] = useState<number>(0);
-  const [downloadState, setDownloadState] = useState<'idle' | 'active' | 'success' | 'error'>('idle');
-  const [downloadDetail, setDownloadDetail] = useState<string | null>(null);
-  const [downloadBytes, setDownloadBytes] = useState<{ received?: number; total?: number }>({});
-  const [downloadSegments, setDownloadSegments] = useState<{
-    phase?: "model" | "ocr";
-    model?: { received?: number; total?: number };
-    ocr?: { received?: number; total?: number };
-  }>({});
-  const [downloadEta, setDownloadEta] = useState<number | null>(null);
-  const [downloadAttempt, setDownloadAttempt] = useState<number>(0);
+  const [connectStatus, setConnectStatus] = useState<'connecting' | 'error'>('connecting');
+  const [connectMsg, setConnectMsg] = useState<string | null>("Talking to the cloud server...");
+  const [connectDetail, setConnectDetail] = useState<string | null>(null);
+  const [connectAttempt, setConnectAttempt] = useState<number>(0);
   const [verified, setVerified] = useState<boolean>(false);
   const [notificationsReady, setNotificationsReady] = useState<boolean>(false);
-  const [lastDownloadTick, setLastDownloadTick] = useState<number>(Date.now());
-  const hideDownloadRef = useRef<number | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const analyzingNotificationTag = useRef<string>("probx-analyzing");
   const notificationIdRef = useRef<number>(1);
-  const bootActiveRef = useRef<boolean>(true);
   const PROGRESS_CHANNEL = "probx-progress";
   const ALERT_CHANNEL = "probx-alerts";
+  const offlineNotificationId = useRef<number | null>(null);
+  const slowTimerRef = useRef<number | null>(null);
+  const modelLabels: Record<ModelChoice, string> = {
+    "gemini-1.5-flash": "Gemini fact-checker",
+    "openrouter-llama": "Llama (OpenRouter)"
+  };
+  const modeLabels: Record<AnalysisMode, string> = {
+    fast: "Quick check",
+    analyze: "Balanced check",
+    "deep-analytic": "Thorough check"
+  };
 
   const modeSettings: Record<AnalysisMode, number> = {
     fast: 30,
@@ -206,37 +111,32 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Smooth progress when backend does not report pct; prevents “stuck at 1%”
   useEffect(() => {
-    if (downloadState !== 'active') return;
-    const id = window.setInterval(() => {
-      setDownloadPct((pct) => {
-        const now = Date.now();
-        const elapsed = now - lastDownloadTick;
-        if (elapsed > 5000 && pct < 90) {
-          return Math.min(90, pct + 1);
-        }
-        return pct;
-      });
-    }, 2000);
-    return () => window.clearInterval(id);
-  }, [downloadState, lastDownloadTick]);
-
-  useEffect(() => {
-    bootActiveRef.current = view === 'boot';
-  }, [view]);
-
-  useEffect(() => {
-    return () => {
-      if (hideDownloadRef.current) {
-        window.clearTimeout(hideDownloadRef.current);
-      }
-    };
+    const stored = localStorage.getItem("probx-theme");
+    if (stored === "dark" || stored === "light") {
+      setTheme(stored);
+      document.documentElement.classList.toggle("theme-dark", stored === "dark");
+    }
   }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    localStorage.setItem("probx-theme", next);
+    document.documentElement.classList.toggle("theme-dark", next === "dark");
+  };
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("theme-dark", theme === "dark");
+  }, [theme]);
 
   useEffect(() => {
     let removeListener: (() => void) | undefined;
     const initNotifications = async () => {
+      const platform = (window as any)?.Capacitor?.getPlatform?.();
+      if (platform === 'web') {
+        return;
+      }
       try {
         let permStatus = await LocalNotifications.checkPermissions();
 
@@ -269,6 +169,10 @@ const App: React.FC = () => {
             window.location.hash = `#${target}`;
             window.focus();
           }
+          if (offlineNotificationId.current && event.notification?.id === offlineNotificationId.current) {
+            LocalNotifications.cancel({ notifications: [{ id: offlineNotificationId.current }] }).catch(() => undefined);
+            offlineNotificationId.current = null;
+          }
         });
         removeListener = () => sub.remove();
       } catch (err) {
@@ -281,7 +185,34 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const scheduleLocalNotification = async (opts: { title: string; body: string; channel?: string; tag?: string; sound?: string | null; target?: string; id?: number }) => {
+  useEffect(() => {
+    const onOffline = () => {
+      scheduleLocalNotification({
+        title: "Internet disconnected",
+        body: "Reconnect to continue analysis.",
+        channel: ALERT_CHANNEL,
+        sound: "default",
+        persist: true,
+        id: 99991
+      }).then(() => {
+        offlineNotificationId.current = 99991;
+      });
+    };
+    const onOnline = () => {
+      if (offlineNotificationId.current) {
+        LocalNotifications.cancel({ notifications: [{ id: offlineNotificationId.current }] }).catch(() => undefined);
+        offlineNotificationId.current = null;
+      }
+    };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
+    };
+  }, []);
+
+  const scheduleLocalNotification = async (opts: { title: string; body: string; channel?: string; tag?: string; sound?: string | undefined; target?: string; id?: number; persist?: boolean }) => {
     if (!notificationsReady) {
       // graceful no-op on web/denied permission
       return;
@@ -299,138 +230,80 @@ const App: React.FC = () => {
           body: opts.body,
           channelId: opts.channel || PROGRESS_CHANNEL,
           group: opts.tag || "probx",
-          sound: opts.sound === undefined ? undefined : opts.sound,
+          sound: opts.sound,
           smallIcon: "ic_launcher",
           iconColor: "#0ea5e9",
           extra: { target: opts.target }
         }]
       });
-      window.setTimeout(() => {
-        LocalNotifications.cancel({ notifications: [{ id: nextId }] }).catch(() => undefined);
-      }, 6000);
+      if (!opts.persist) {
+        window.setTimeout(() => {
+          LocalNotifications.cancel({ notifications: [{ id: nextId }] }).catch(() => undefined);
+        }, 6000);
+      }
     } catch (err) {
       console.warn("Notification send skipped", err);
     }
   };
 
-  const startDownloadBoot = (msg: string) => {
-    if (hideDownloadRef.current) window.clearTimeout(hideDownloadRef.current);
-    setDownloadState('active');
-    setDownloadMsg(msg);
-    setDownloadDetail('Fetching optimized on-device models');
-    setDownloadSegments({});
-    setDownloadBytes({});
-    setDownloadPct((pct) => (pct > 0 ? pct : 1));
-  };
-
-  const finishDownloadBoot = (status: 'success' | 'error', detail?: string) => {
-    if (hideDownloadRef.current) window.clearTimeout(hideDownloadRef.current);
-    setDownloadState(status);
-    setDownloadDetail(detail ?? null);
-    if (status === 'success') {
-      localStorage.setItem("probx-model-ready", "true");
-    }
-  };
-
-  const pushAnalyzingNotification = (opts: { title: string; body: string; tag?: string; target?: string; alert?: boolean }) => {
+  const pushAnalyzingNotification = (opts: { title: string; body: string; tag?: string; target?: string; alert?: boolean; persist?: boolean }) => {
     scheduleLocalNotification({
       title: opts.title,
       body: opts.body,
       tag: opts.tag || analyzingNotificationTag.current,
       target: opts.target,
       channel: opts.alert ? ALERT_CHANNEL : PROGRESS_CHANNEL,
-      sound: opts.alert ? "default" : null
+      sound: opts.alert ? "default" : null,
+      persist: opts.persist
     });
-  };
-
-  const hydrateDownloadProgress = () => {
-    if (typeof window === "undefined") return;
-    const stored = localStorage.getItem("probx-model-progress");
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored) as { received?: number; total?: number; pct?: number };
-      if (parsed?.received || parsed?.total) {
-        setDownloadBytes({ received: parsed.received, total: parsed.total });
-      }
-      if (typeof parsed?.pct === "number") {
-        setDownloadPct(Math.max(1, Math.min(99, Math.round(parsed.pct))));
-      }
-    } catch {
-      // ignore invalid cache
-    }
-  };
-
-  const persistDownloadProgress = (received?: number, total?: number, pct?: number) => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem("probx-model-progress", JSON.stringify({
-      received,
-      total,
-      pct,
-      ts: Date.now()
-    }));
   };
 
   useEffect(() => {
     if (verified) return;
-    hydrateDownloadProgress();
     let cancelled = false;
     const warmup = async () => {
       try {
         setView('boot');
-        startDownloadBoot("Preparing on-device models");
-        const mod = await loadAnalyzer();
-        mod.registerDownloadProgress((msg, pct, receivedBytes, totalBytes, extra) => {
-          if (cancelled || !bootActiveRef.current) return;
-          if (msg === null) {
-            setDownloadMsg("Download complete");
-            setDownloadPct(100);
-            setDownloadBytes({ received: totalBytes ?? downloadBytes.total, total: totalBytes ?? downloadBytes.total });
-            if (extra?.model || extra?.ocr) setDownloadSegments({ phase: extra?.phase, model: extra?.model, ocr: extra?.ocr });
-            finishDownloadBoot('success', "Models cached. We're good to go.");
-            setVerified(true);
-            setView('input');
-            mod.registerDownloadProgress(() => undefined);
-            if (typeof window !== "undefined") {
-              localStorage.removeItem("probx-model-progress");
-            }
-            return;
-          }
-          const derivedPct = typeof totalBytes === 'number' && typeof receivedBytes === 'number' && totalBytes > 0
-            ? Math.max(1, Math.round((receivedBytes / totalBytes) * 100))
-            : typeof pct === 'number'
-            ? Math.max(1, Math.round(pct * 100))
-            : Math.max(downloadPct, 5);
-          setDownloadMsg(msg);
-          setDownloadPct(Math.min(99, derivedPct));
-          const aggregateReceived = receivedBytes ?? extra?.model?.received ?? extra?.ocr?.received;
-          const aggregateTotal = totalBytes ?? extra?.model?.total ?? extra?.ocr?.total;
-          setDownloadBytes((prev) => ({
-            received: aggregateReceived ?? prev.received,
-            total: aggregateTotal ?? prev.total
-          }));
-          if (aggregateReceived && aggregateTotal) {
-            const connection = (navigator as any)?.connection;
-            const downlinkMbps = connection?.downlink && connection.downlink > 0 ? connection.downlink : 2;
-            const bytesPerSec = downlinkMbps * 125000;
-            const remaining = Math.max(0, aggregateTotal - aggregateReceived);
-            const eta = Math.max(3, Math.round(remaining / bytesPerSec));
-            setDownloadEta(eta);
-          }
-          if (extra?.model || extra?.ocr || extra?.phase) {
-            setDownloadSegments({ phase: extra?.phase, model: extra?.model, ocr: extra?.ocr });
-          }
-          setLastDownloadTick(Date.now());
-          setDownloadDetail(null);
-          setDownloadState('active');
-          persistDownloadProgress(receivedBytes, totalBytes, derivedPct);
-        });
-        await mod.warmupModels();
+        setConnectStatus('connecting');
+        const tips = [
+          "Tip: Paste a headline or a valid news link for best results.",
+          "Tip: Upload a screenshot or image with clear ext to fact-check images.",
+          "Tip: We cross-check news and social chatter to spot contradictions.",
+          "Tip: Use clear sentences—who, what, where, when.",
+          "Tip: Try a source link for faster, stronger evidence."
+        ];
+        setConnectMsg(tips[Math.floor(Math.random() * tips.length)]);
+        setConnectDetail(null);
+        // Skip API login check: just wait briefly for aesthetic boot
+        const bootTips = [
+          "Tip: Paste the full article link for stronger evidence.",
+          "Tip: Watch for sensational headlines—verify before sharing.",
+          "Tip: Cross-check with at least two reputable outlets.",
+          "Tip: Screenshots of text are okay—clear images work best.",
+          "Tip: Trust outlets with transparent sourcing and corrections.",
+          "Tip: Look for author names and publication dates."
+        ];
+        const tipInterval = setInterval(() => {
+          const next = bootTips[Math.floor(Math.random() * bootTips.length)];
+          setConnectMsg(next);
+        }, 1000);
+        await new Promise((res) => setTimeout(res, 4000));
+        clearInterval(tipInterval);
+        if (!cancelled) {
+          setVerified(true);
+          setView('input');
+        }
       } catch (err) {
         if (cancelled) return;
         console.error(err);
-        setDownloadState('error');
-        setDownloadMsg("Model download interrupted");
-        setDownloadDetail("Check your connection and retry.");
+        setConnectStatus('error');
+        const msg = err instanceof Error ? err.message : "";
+        setConnectMsg("We couldn't reach the checker.");
+        setConnectDetail(
+          msg.includes("token")
+            ? "Required Hugging Face Access Token with Read + Model Inference API permissions."
+            : "Please check your connection and try again in a moment."
+        );
         setVerified(false);
       }
     };
@@ -438,13 +311,17 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [verified, downloadAttempt]);
+  }, [verified, connectAttempt]);
 
   // Handler for starting the analysis
   const handleAnalyze = async (input: string | File, type: InputType, model: ModelChoice, mode: AnalysisMode) => {
     if (!verified) {
       setView('boot');
       return;
+    }
+    if (slowTimerRef.current) {
+      window.clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
     }
     setView('processing');
     setError(null);
@@ -460,11 +337,22 @@ const App: React.FC = () => {
     setEtaSeconds(baseEta);
     pushAnalyzingNotification({
       title: "ProbX News",
-      body: `Analyzing with ${model} • ${mode}. Gathering sources...`,
+      body: `${modelLabels[model]} • ${modeLabels[mode]}. Gathering sources...`,
       target: "processing"
     });
 
-    const friendlyError = "Connection interrupted. Please retry.";
+    slowTimerRef.current = window.setTimeout(() => {
+      scheduleLocalNotification({
+        title: "Still working...",
+        body: "Analysis is taking a bit longer. Hang tight.",
+        channel: PROGRESS_CHANNEL,
+        sound: undefined,
+        persist: false,
+        id: 99992
+      });
+    }, 5000);
+
+    const friendlyError = "We couldn't finish the check. Please try again.";
     try {
       let lastErr: any = null;
       for (let attempt = 1; attempt <= 3; attempt++) {
@@ -480,9 +368,10 @@ const App: React.FC = () => {
           setView('result');
           pushAnalyzingNotification({
             title: "Analysis complete",
-            body: `${model} • ${mode} • ${result.sources.length} sources found`,
+            body: `${modelLabels[model]} • ${modeLabels[mode]} • ${result.sources.length} sources found`,
             target: "result",
-            alert: true
+            alert: true,
+            persist: true
           });
           lastErr = null;
           break;
@@ -495,8 +384,25 @@ const App: React.FC = () => {
       if (lastErr) throw lastErr;
     } catch (err: any) {
       console.error(err);
-      setError(friendlyError);
+      const msg = typeof err?.message === "string" ? err.message : "";
+      const computedError =
+        msg.includes("Image analysis needs the Gemini")
+          ? "Add your Gemini API key in .env (VITE_GEMINI_API_KEY) to analyze images."
+          : msg.includes("Missing Gemini or OpenRouter")
+          ? "Add a Gemini or OpenRouter API key in .env and restart, then retry."
+          : msg.includes("Gemini error")
+          ? "We couldn’t reach Gemini right now. Please try again or switch model."
+          : msg.includes("OpenRouter error")
+          ? "We couldn’t reach OpenRouter right now. Please try again or switch model."
+          : msg.includes("API key")
+          ? "An API key is missing. Please add it and restart."
+          : "We’re having trouble finishing the check. Please try again.";
+      setError(computedError);
       setView('input');
+    }
+    if (slowTimerRef.current) {
+      window.clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
     }
   };
 
@@ -509,20 +415,15 @@ const App: React.FC = () => {
   if (view === 'boot') {
     return (
       <BootScreen
-        downloadState={downloadState}
-        downloadMsg={downloadMsg}
-        downloadDetail={downloadDetail}
-        downloadPct={downloadPct}
-        downloadBytes={downloadBytes}
-        downloadSegments={downloadSegments}
-        downloadEta={downloadEta}
+        status={connectStatus}
+        message={connectMsg}
+        detail={connectDetail}
         onRetry={() => {
-          setDownloadState('active');
-          setDownloadMsg("Reconnecting to model host...");
-          setDownloadDetail("Resuming download from cache.");
-          setDownloadPct((pct) => Math.max(1, pct));
+          setConnectStatus('connecting');
+          setConnectMsg("Trying again...");
+          setConnectDetail(null);
           setView('boot');
-          setDownloadAttempt((attempt) => attempt + 1);
+          setConnectAttempt((attempt) => attempt + 1);
         }}
       />
     );
@@ -531,14 +432,14 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 relative">
       {/* Sticky Header */}
-      <Header />
+      <Header theme={theme} onToggleTheme={toggleTheme} />
 
       {/* Main Content Area */}
       <main className="flex-grow flex flex-col items-center justify-center p-4 pb-12 w-full max-w-3xl mx-auto z-10">
 
         {error && (
-          <div className="w-full bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded shadow-sm animate-pulse" role="alert">
-            <p className="font-bold">System Alert</p>
+          <div className="w-full bg-orange-50 border-l-4 border-orange-500 text-orange-800 p-4 mb-6 rounded shadow-sm" role="alert">
+            <p className="font-bold">Heads up</p>
             <p>{error}</p>
           </div>
         )}

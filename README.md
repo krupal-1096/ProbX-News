@@ -10,8 +10,8 @@ ProbX News is an AI-powered fact-checking experience for web and mobile that let
 
 ## How It Works
 - Input: Users submit a URL/text snippet or upload an image.
-- Agent: Free, no-signup AI models (Transformers.js) run in the browser to score credibility—zero API keys required. Users can pick a model (open BART/CLIP, Grok-lite, Gemini-lite) and a mode (Fast/Analyze/Analytic). Text is zero-shot classified; images use CLIP-style similarity. Each query is cross-checked via Google/Bing HTML mirrors (r.jina.ai) to surface corroborating sources.
-- Evidence: The engine returns a verdict (Real/Fake/Inconclusive/Satire), confidence score with color band, emotion intent, harm/safety flags, ethics rating, markdown report, agent log rows, and the sources used.
+- Agent: Gemini 1.5 (or OpenRouter Llama) runs claim verification. OCR prefers Gemini; if unavailable, it falls back to a local `@xenova/transformers` OCR (TroCR). Cross-checking uses GDELT + Google News RSS; social lookups (X, Reddit) are appended for context.
+- Evidence: The engine returns a verdict (Real/Fake/Inconclusive/Satire), confidence score with color band, emotion intent, harm/safety flags, ethics rating, markdown report, agent log rows, and the sources used. Irrelevant sources are filtered against claim keywords; absurd/no-evidence claims are forced to low-confidence inconclusive.
 - UI: Boot animation → home screen with model/mode picker → processing state with ETA → result view with verdict, sources, emotions, safety, ethics, and reset.
 
 ## Web Quickstart
@@ -25,7 +25,11 @@ Prerequisites: Node.js 18+.
 Open the printed Vite URL (default http://localhost:5173).
 
 ## Environment
-No API keys or sign-ins are required. Models are fetched on demand from public hubs and run directly in the browser. For cross-checking, the app performs a lightweight web lookup through r.jina.ai (Google/Bing mirrors); if the mirror is blocked, the app still returns the model-based verdict.
+- Required (pick at least one):  
+  - `VITE_GEMINI_API_KEY` (preferred for text + OCR)  
+  - `VITE_OPENAI_API_KEY` (OpenRouter free-tier key for Llama fallback)  
+- Optional: `GEMINI_API_KEY` or `OPENROUTER_API_KEY` aliases.  
+- Cross-checking uses public GDELT + Google News RSS + `r.jina.ai` mirrors; social lookups do not require keys.
 
 ## Web Deploy
 - Build for production: `npm run build` (outputs to `dist/`).  
@@ -40,10 +44,9 @@ No API keys or sign-ins are required. Models are fetched on demand from public h
   - `cd android && ./gradlew assembleDebug`  
   - `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 
-Boot download flow:
-- On first launch, the app stays on the boot screen and downloads all required text + OCR models before navigating home.
-- Progress is per-asset and resumes if the app is interrupted or force-closed.
-- No download bar appears on the home/analysis screens—only on boot.
+Boot flow:
+- On first launch, the app briefly checks Hugging Face Inference connectivity (no model downloads).
+- If HF is warming up or rate-limited, the boot screen may show a short wait or allow retry.
 
 Troubleshooting Android builds:
 - Web code changes require a fresh build + copy before running in Android Studio:
@@ -59,11 +62,13 @@ Assets:
 
 Notes:
 - Re-run `npm run build` + `npx cap sync android` after web code changes.
-- “Live Now” ticker shows fact-check tips only (no ads). Model/mode pickers are behind the Settings toggle on the home screen. Default model: `gemini-lite`.
+- “Live Now” ticker shows fact-check tips only (no ads). Model/mode pickers are behind the Settings toggle on the home screen. Default model: Gemini; fallback: OpenRouter Llama.
+- The UI now has light/dark themes, immersive loader visuals, randomized helpful tips/placeholders, and Android notifications (completion, slow-job reminder, offline alert).
 
 ## Tech Stack
 - React + Vite + TypeScript
-- Transformers.js (browser) + CLIP/BART models (community Grok-lite/Gemini-lite presets)
+- Gemini 1.5 + OpenRouter (Llama), local OCR fallback (`@xenova/transformers`)
+- GDELT + Google News RSS + `r.jina.ai` text mirror + social lookups
 - Tailwind-style utility classes for styling
 
 ## Attribution & License

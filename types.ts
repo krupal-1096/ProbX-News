@@ -34,9 +34,10 @@ export interface AnalysisResult {
   ethics: 'good' | 'moderate' | 'bad';
   modelUsed: ModelChoice;
   modeUsed: AnalysisMode;
+  shouldShowDetail?: boolean;
 }
 
-export type ModelChoice = 'open-bart-clip' | 'grok-lite' | 'gemini-lite';
+export type ModelChoice = 'gemini-1.5-flash' | 'openrouter-llama';
 
 export type AnalysisMode = 'fast' | 'analyze' | 'deep-analytic';
 
