@@ -1,5 +1,5 @@
-<div align="left">
-  <img src="assets/imgs/probx_logo_normal.png" alt="ProbX News Logo" width="360" />
+<div align="center">
+  <img src="assets/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png" alt="ProbX News Logo" width="360" />
 </div>
 
 ![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)
