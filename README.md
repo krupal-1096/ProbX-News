@@ -40,6 +40,18 @@ No API keys or sign-ins are required. Models are fetched on demand from public h
   - `cd android && ./gradlew assembleDebug`  
   - `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 
+Boot download flow:
+- On first launch, the app stays on the boot screen and downloads all required text + OCR models before navigating home.
+- Progress is per-asset and resumes if the app is interrupted or force-closed.
+- No download bar appears on the home/analysis screens—only on boot.
+
+Troubleshooting Android builds:
+- Web code changes require a fresh build + copy before running in Android Studio:
+  1) `npm run build`
+  2) `npx cap copy android` (or `npx cap sync android`)
+  3) Rebuild/run in Android Studio or via Gradle.
+- If you still see an old UI, uninstall or clear app data to drop cached assets, then reinstall after the steps above.
+
 Assets:
 - Boot animation: CSS-driven animated splash (no bundled video assets)
 - App icons: `assets/icons/android/*` (mirrored into `android/app/src/main/res/mipmap-*`)

@@ -15,21 +15,90 @@ const loadAnalyzer = () => {
 };
 import appMark from './assets/imgs/logo_only.png';
 
-const BootScreen: React.FC = () => {
+const formatBytes = (val?: number) => {
+  if (!val && val !== 0) return null;
+  const units = ["B", "KB", "MB", "GB"];
+  let v = val;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v = v / 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
+};
+
+const formatSeconds = (sec?: number | null) => {
+  if (!sec || sec < 0) return null;
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+};
+
+type BootScreenProps = {
+  downloadState: 'idle' | 'active' | 'success' | 'error';
+  downloadMsg: string | null;
+  downloadDetail: string | null;
+  downloadPct: number;
+  downloadBytes: { received?: number; total?: number };
+  downloadSegments: {
+    phase?: "model" | "ocr";
+    model?: { received?: number; total?: number };
+    ocr?: { received?: number; total?: number };
+  };
+  downloadEta: number | null;
+  onRetry: () => void;
+};
+
+const BootScreen: React.FC<BootScreenProps> = ({
+  downloadState,
+  downloadMsg,
+  downloadDetail,
+  downloadPct,
+  downloadBytes,
+  downloadSegments,
+  downloadEta,
+  onRetry
+}) => {
   const [step, setStep] = useState(0);
   const steps = [
-    "Warming up free AI models",
+    "Configuring AI models",
     "Checking cross-check channels",
     "Arming fake news radar",
     "Loading home screen"
   ];
 
   useEffect(() => {
+    if (downloadState === 'active') {
+      setStep(0);
+      return;
+    }
     const interval = setInterval(() => {
       setStep((prev) => (prev + 1) % steps.length);
     }, 750);
     return () => clearInterval(interval);
-  }, []);
+  }, [downloadState, steps.length]);
+
+  const downloadBarColor = downloadState === 'success' ? 'bg-green-400' : downloadState === 'error' ? 'bg-red-400' : 'bg-blue-400';
+  const received = formatBytes(downloadBytes.received);
+  const total = formatBytes(downloadBytes.total);
+  const percentText = `${Math.min(100, downloadPct)}%`;
+  const detailLine = downloadState === 'error'
+    ? downloadDetail || "Connection lost. Tap retry to resume."
+    : null;
+  const etaText = formatSeconds(downloadEta);
+  const modelText = (() => {
+    const received = formatBytes(downloadSegments.model?.received);
+    const total = formatBytes(downloadSegments.model?.total);
+    if (!received && !total) return null;
+    return `Model: ${received || "0 B"}${total ? ` of ${total}` : ""}`;
+  })();
+  const ocrText = (() => {
+    const received = formatBytes(downloadSegments.ocr?.received);
+    const total = formatBytes(downloadSegments.ocr?.total);
+    if (!received && !total) return null;
+    return `OCR: ${received || "0 B"}${total ? ` of ${total}` : ""}`;
+  })();
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center relative overflow-hidden">
@@ -44,8 +113,53 @@ const BootScreen: React.FC = () => {
           </div>
         </div>
         <div className="space-y-2">
-          <p className="text-lg font-semibold">Spooling up the ProbX engine</p>
+          <p className="text-lg font-semibold">Launching ProbX engine</p>
           <p className="text-sm text-slate-300">{steps[step]}</p>
+        </div>
+      </div>
+      <div className="absolute bottom-8 left-0 right-0 px-6">
+        <div className="max-w-xl mx-auto bg-slate-900/70 border border-white/10 rounded-2xl p-4 backdrop-blur-xl shadow-lg">
+          <div className="flex items-center justify-between text-xs uppercase tracking-widest text-slate-400">
+            <span>
+              {downloadState === 'error'
+                ? 'Download paused'
+                : downloadSegments.phase === 'ocr'
+                ? 'Downloading OCR assets'
+                : 'Downloading models'}
+            </span>
+            <span className="text-slate-300">Progress: {percentText}</span>
+          </div>
+          <div className="w-full bg-slate-800/80 h-2.5 rounded-full mt-2 overflow-hidden">
+            <div
+              className={`h-2.5 transition-all ${downloadBarColor} bar-stripes`}
+              style={{ width: `${Math.min(100, downloadPct)}%` }}
+              aria-label={`Download progress ${Math.min(100, downloadPct)} percent`}
+            />
+          </div>
+          <div className="flex items-center justify-between mt-2 text-xs text-slate-300">
+            <span>{downloadMsg || "Preparing download..."}</span>
+            {etaText ? <span>ETA: {etaText}</span> : <span aria-hidden="true">&nbsp;</span>}
+          </div>
+          {(modelText || ocrText) && (
+            <div className="flex flex-col gap-1 mt-2 text-[11px] text-slate-400">
+              {modelText && <span>{modelText}</span>}
+              {ocrText && <span>{ocrText}</span>}
+            </div>
+          )}
+          {detailLine && <p className="text-[11px] text-slate-400 mt-1">{detailLine}</p>}
+          <div className="mt-2 text-[11px] text-slate-400 space-y-1">
+            <p>One-time install. Files stay cached for offline use.</p>
+            <p>If interrupted, the download resumes automatically.</p>
+            {etaText && <p>Estimated time remaining: {etaText}</p>}
+          </div>
+          {downloadState === 'error' && (
+            <button
+              className="mt-3 w-full text-xs font-semibold uppercase tracking-widest bg-red-500/20 text-red-200 py-2 rounded-lg border border-red-400/40 hover:bg-red-500/30 transition"
+              onClick={onRetry}
+            >
+              Retry download
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -63,21 +177,20 @@ const App: React.FC = () => {
   const [downloadState, setDownloadState] = useState<'idle' | 'active' | 'success' | 'error'>('idle');
   const [downloadDetail, setDownloadDetail] = useState<string | null>(null);
   const [downloadBytes, setDownloadBytes] = useState<{ received?: number; total?: number }>({});
-  const [isReady, setIsReady] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("probx-model-ready") === "true";
-  });
+  const [downloadSegments, setDownloadSegments] = useState<{
+    phase?: "model" | "ocr";
+    model?: { received?: number; total?: number };
+    ocr?: { received?: number; total?: number };
+  }>({});
+  const [downloadEta, setDownloadEta] = useState<number | null>(null);
+  const [downloadAttempt, setDownloadAttempt] = useState<number>(0);
+  const [verified, setVerified] = useState<boolean>(false);
   const [notificationsReady, setNotificationsReady] = useState<boolean>(false);
-  const [readyBannerVisible, setReadyBannerVisible] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("probx-model-ready") === "true";
-  });
+  const [lastDownloadTick, setLastDownloadTick] = useState<number>(Date.now());
   const hideDownloadRef = useRef<number | null>(null);
-  const hideReadyRef = useRef<number | null>(null);
-  const downloadNotificationTag = useRef<string>("probx-model-download");
-  const lastNotifiedPct = useRef<number>(0);
   const analyzingNotificationTag = useRef<string>("probx-analyzing");
   const notificationIdRef = useRef<number>(1);
+  const bootActiveRef = useRef<boolean>(true);
   const PROGRESS_CHANNEL = "probx-progress";
   const ALERT_CHANNEL = "probx-alerts";
 
@@ -88,17 +201,35 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    const timer = setTimeout(() => setView('input'), 1800);
-    return () => clearTimeout(timer);
+    if (typeof navigator !== "undefined" && navigator.storage?.persist) {
+      navigator.storage.persist().catch(() => undefined);
+    }
   }, []);
+
+  // Smooth progress when backend does not report pct; prevents “stuck at 1%”
+  useEffect(() => {
+    if (downloadState !== 'active') return;
+    const id = window.setInterval(() => {
+      setDownloadPct((pct) => {
+        const now = Date.now();
+        const elapsed = now - lastDownloadTick;
+        if (elapsed > 5000 && pct < 90) {
+          return Math.min(90, pct + 1);
+        }
+        return pct;
+      });
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [downloadState, lastDownloadTick]);
+
+  useEffect(() => {
+    bootActiveRef.current = view === 'boot';
+  }, [view]);
 
   useEffect(() => {
     return () => {
       if (hideDownloadRef.current) {
         window.clearTimeout(hideDownloadRef.current);
-      }
-      if (hideReadyRef.current) {
-        window.clearTimeout(hideReadyRef.current);
       }
     };
   }, []);
@@ -150,14 +281,17 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const scheduleLocalNotification = async (opts: { title: string; body: string; channel?: string; tag?: string; sound?: string | null; target?: string }) => {
+  const scheduleLocalNotification = async (opts: { title: string; body: string; channel?: string; tag?: string; sound?: string | null; target?: string; id?: number }) => {
     if (!notificationsReady) {
       // graceful no-op on web/denied permission
       return;
     }
     try {
-      const nextId = (notificationIdRef.current % 2147483640) + 1;
-      notificationIdRef.current = nextId;
+      const nextId = opts.id ?? ((notificationIdRef.current % 2147483640) + 1);
+      if (!opts.id) notificationIdRef.current = nextId;
+      else {
+        await LocalNotifications.cancel({ notifications: [{ id: nextId }] }).catch(() => undefined);
+      }
       await LocalNotifications.schedule({
         notifications: [{
           id: nextId,
@@ -171,48 +305,30 @@ const App: React.FC = () => {
           extra: { target: opts.target }
         }]
       });
+      window.setTimeout(() => {
+        LocalNotifications.cancel({ notifications: [{ id: nextId }] }).catch(() => undefined);
+      }, 6000);
     } catch (err) {
       console.warn("Notification send skipped", err);
     }
   };
 
-  useEffect(() => {
-    if (isReady) {
-      setReadyBannerVisible(true);
-      if (hideReadyRef.current) window.clearTimeout(hideReadyRef.current);
-      hideReadyRef.current = window.setTimeout(() => setReadyBannerVisible(false), 2200);
-    }
-  }, [isReady]);
-
-  const pushDownloadNotification = async (title: string, body: string) => {
-    await scheduleLocalNotification({ title, body, channel: PROGRESS_CHANNEL, tag: downloadNotificationTag.current, sound: null, target: "processing" });
-  };
-
-  const startDownloadBanner = (msg: string) => {
+  const startDownloadBoot = (msg: string) => {
     if (hideDownloadRef.current) window.clearTimeout(hideDownloadRef.current);
     setDownloadState('active');
     setDownloadMsg(msg);
     setDownloadDetail('Fetching optimized on-device models');
-    setDownloadPct(0);
+    setDownloadSegments({});
     setDownloadBytes({});
-    lastNotifiedPct.current = 0;
+    setDownloadPct((pct) => (pct > 0 ? pct : 1));
   };
 
-  const finishDownloadBanner = (status: 'success' | 'error', detail?: string) => {
+  const finishDownloadBoot = (status: 'success' | 'error', detail?: string) => {
     if (hideDownloadRef.current) window.clearTimeout(hideDownloadRef.current);
     setDownloadState(status);
     setDownloadDetail(detail ?? null);
-    setDownloadBytes(status === 'success' ? { received: downloadBytes.total, total: downloadBytes.total } : downloadBytes);
     if (status === 'success') {
       localStorage.setItem("probx-model-ready", "true");
-      setReadyBannerVisible(true);
-      if (hideReadyRef.current) window.clearTimeout(hideReadyRef.current);
-      hideReadyRef.current = window.setTimeout(() => setReadyBannerVisible(false), 2200);
-      hideDownloadRef.current = window.setTimeout(() => {
-        setDownloadState('idle');
-        setDownloadMsg(null);
-        setDownloadDetail(null);
-      }, 1400);
     }
   };
 
@@ -227,19 +343,111 @@ const App: React.FC = () => {
     });
   };
 
+  const hydrateDownloadProgress = () => {
+    if (typeof window === "undefined") return;
+    const stored = localStorage.getItem("probx-model-progress");
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as { received?: number; total?: number; pct?: number };
+      if (parsed?.received || parsed?.total) {
+        setDownloadBytes({ received: parsed.received, total: parsed.total });
+      }
+      if (typeof parsed?.pct === "number") {
+        setDownloadPct(Math.max(1, Math.min(99, Math.round(parsed.pct))));
+      }
+    } catch {
+      // ignore invalid cache
+    }
+  };
+
+  const persistDownloadProgress = (received?: number, total?: number, pct?: number) => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("probx-model-progress", JSON.stringify({
+      received,
+      total,
+      pct,
+      ts: Date.now()
+    }));
+  };
+
+  useEffect(() => {
+    if (verified) return;
+    hydrateDownloadProgress();
+    let cancelled = false;
+    const warmup = async () => {
+      try {
+        setView('boot');
+        startDownloadBoot("Preparing on-device models");
+        const mod = await loadAnalyzer();
+        mod.registerDownloadProgress((msg, pct, receivedBytes, totalBytes, extra) => {
+          if (cancelled || !bootActiveRef.current) return;
+          if (msg === null) {
+            setDownloadMsg("Download complete");
+            setDownloadPct(100);
+            setDownloadBytes({ received: totalBytes ?? downloadBytes.total, total: totalBytes ?? downloadBytes.total });
+            if (extra?.model || extra?.ocr) setDownloadSegments({ phase: extra?.phase, model: extra?.model, ocr: extra?.ocr });
+            finishDownloadBoot('success', "Models cached. We're good to go.");
+            setVerified(true);
+            setView('input');
+            mod.registerDownloadProgress(() => undefined);
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("probx-model-progress");
+            }
+            return;
+          }
+          const derivedPct = typeof totalBytes === 'number' && typeof receivedBytes === 'number' && totalBytes > 0
+            ? Math.max(1, Math.round((receivedBytes / totalBytes) * 100))
+            : typeof pct === 'number'
+            ? Math.max(1, Math.round(pct * 100))
+            : Math.max(downloadPct, 5);
+          setDownloadMsg(msg);
+          setDownloadPct(Math.min(99, derivedPct));
+          const aggregateReceived = receivedBytes ?? extra?.model?.received ?? extra?.ocr?.received;
+          const aggregateTotal = totalBytes ?? extra?.model?.total ?? extra?.ocr?.total;
+          setDownloadBytes((prev) => ({
+            received: aggregateReceived ?? prev.received,
+            total: aggregateTotal ?? prev.total
+          }));
+          if (aggregateReceived && aggregateTotal) {
+            const connection = (navigator as any)?.connection;
+            const downlinkMbps = connection?.downlink && connection.downlink > 0 ? connection.downlink : 2;
+            const bytesPerSec = downlinkMbps * 125000;
+            const remaining = Math.max(0, aggregateTotal - aggregateReceived);
+            const eta = Math.max(3, Math.round(remaining / bytesPerSec));
+            setDownloadEta(eta);
+          }
+          if (extra?.model || extra?.ocr || extra?.phase) {
+            setDownloadSegments({ phase: extra?.phase, model: extra?.model, ocr: extra?.ocr });
+          }
+          setLastDownloadTick(Date.now());
+          setDownloadDetail(null);
+          setDownloadState('active');
+          persistDownloadProgress(receivedBytes, totalBytes, derivedPct);
+        });
+        await mod.warmupModels();
+      } catch (err) {
+        if (cancelled) return;
+        console.error(err);
+        setDownloadState('error');
+        setDownloadMsg("Model download interrupted");
+        setDownloadDetail("Check your connection and retry.");
+        setVerified(false);
+      }
+    };
+    warmup();
+    return () => {
+      cancelled = true;
+    };
+  }, [verified, downloadAttempt]);
+
   // Handler for starting the analysis
   const handleAnalyze = async (input: string | File, type: InputType, model: ModelChoice, mode: AnalysisMode) => {
+    if (!verified) {
+      setView('boot');
+      return;
+    }
     setView('processing');
     setError(null);
-    if (!isReady) {
-      startDownloadBanner("this will take a moment...");
-    } else {
-      setDownloadState('success');
-      setDownloadMsg("Using cached models");
-      setDownloadDetail("No download required");
-      setDownloadPct(100);
-      finishDownloadBanner('success', "Models cached. We're good to go.");
-    }
     let baseEta = modeSettings[mode];
     if (type === InputType.IMAGE) {
       baseEta = Math.round(baseEta * 1.2); // slight buffer for image processing
@@ -256,63 +464,38 @@ const App: React.FC = () => {
       target: "processing"
     });
 
+    const friendlyError = "Connection interrupted. Please retry.";
     try {
-      const mod = await loadAnalyzer();
-      mod.registerDownloadProgress((msg, pct, receivedBytes, totalBytes) => {
-        if (msg === null) {
-          setDownloadMsg("Download complete");
-          setDownloadPct(100);
-          finishDownloadBanner('success', "Models cached. We're good to go.");
-          pushDownloadNotification("ProbX News", "Model download complete — ready for analysis.");
-          lastNotifiedPct.current = 100;
-          setIsReady(true);
-          return;
+      let lastErr: any = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const mod = await loadAnalyzer();
+          const { analyzeContent } = mod;
+          const result = await analyzeContent(input, type, model, mode);
+          setAnalysisData(result);
+          if (result.sources?.length) {
+            const adjusted = Math.max(20, Math.min(300, baseEta + result.sources.length * 10));
+            setEtaSeconds(adjusted);
+          }
+          setView('result');
+          pushAnalyzingNotification({
+            title: "Analysis complete",
+            body: `${model} • ${mode} • ${result.sources.length} sources found`,
+            target: "result",
+            alert: true
+          });
+          lastErr = null;
+          break;
+        } catch (innerErr) {
+          lastErr = innerErr;
+          // Brief pause before retry
+          await new Promise((res) => setTimeout(res, 600));
         }
-        setDownloadMsg(msg);
-        const pctNum = typeof pct === 'number' ? Math.max(1, Math.round(pct * 100)) : downloadPct || 1;
-        const displayPct = Math.min(100, pctNum);
-        setDownloadPct(displayPct);
-        setDownloadBytes({
-          received: receivedBytes ?? downloadBytes.received,
-          total: totalBytes ?? downloadBytes.total
-        });
-        setDownloadDetail(`Progress: ${displayPct}%`);
-        setDownloadState('active');
-        if (displayPct - lastNotifiedPct.current >= 5) {
-          pushDownloadNotification("ProbX News", `${displayPct}% • ${msg}`);
-          lastNotifiedPct.current = displayPct;
-        }
-      });
-      const { analyzeContent } = mod;
-      const result = await analyzeContent(input, type, model, mode);
-      setAnalysisData(result);
-      finishDownloadBanner('success', "Models cached. We're good to go.");
-      if (result.sources?.length) {
-        const adjusted = Math.max(20, Math.min(300, baseEta + result.sources.length * 10));
-        setEtaSeconds(adjusted);
       }
-      setView('result');
-      pushAnalyzingNotification({
-        title: "Analysis complete",
-        body: `${model} • ${mode} • ${result.sources.length} sources found`,
-        target: "result",
-        alert: true
-      });
+      if (lastErr) throw lastErr;
     } catch (err: any) {
       console.error(err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setDownloadState('error');
-      setDownloadDetail("Check your connection or try again in a moment.");
-      setDownloadMsg("Model download failed");
-      pushDownloadNotification("ProbX News", `Download error: ${errorMessage}`);
-      pushAnalyzingNotification({
-        title: "Analysis failed",
-        body: errorMessage || "Unexpected error during analysis",
-        tag: analyzingNotificationTag.current,
-        target: "input",
-        alert: true
-      });
-      setError(errorMessage || "An unexpected error occurred during analysis.");
+      setError(friendlyError);
       setView('input');
     }
   };
@@ -324,33 +507,26 @@ const App: React.FC = () => {
   };
 
   if (view === 'boot') {
-    return <BootScreen />;
+    return (
+      <BootScreen
+        downloadState={downloadState}
+        downloadMsg={downloadMsg}
+        downloadDetail={downloadDetail}
+        downloadPct={downloadPct}
+        downloadBytes={downloadBytes}
+        downloadSegments={downloadSegments}
+        downloadEta={downloadEta}
+        onRetry={() => {
+          setDownloadState('active');
+          setDownloadMsg("Reconnecting to model host...");
+          setDownloadDetail("Resuming download from cache.");
+          setDownloadPct((pct) => Math.max(1, pct));
+          setView('boot');
+          setDownloadAttempt((attempt) => attempt + 1);
+        }}
+      />
+    );
   }
-
-  const downloadBarColor = downloadState === 'success' ? 'bg-green-500' : downloadState === 'error' ? 'bg-red-500' : 'bg-blue-500';
-  const downloadTone = downloadState === 'success'
-    ? 'bg-green-50 border-green-500 text-green-800'
-    : downloadState === 'error'
-    ? 'bg-red-50 border-red-500 text-red-800'
-    : 'bg-blue-50 border-blue-500 text-blue-800';
-  const formatBytes = (val?: number) => {
-    if (!val && val !== 0) return null;
-    const units = ["B","KB","MB","GB"];
-    let v = val;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-      v = v / 1024;
-      i += 1;
-    }
-    return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
-  };
-  const downloadedText = (() => {
-    const received = formatBytes(downloadBytes.received);
-    const total = formatBytes(downloadBytes.total);
-    if (received && total) return `${received} of ${total}`;
-    if (received) return `${received} downloaded`;
-    return null;
-  })();
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 relative">
@@ -367,44 +543,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {downloadState !== 'idle' && downloadMsg && (
-          <div className={`w-full ${downloadTone} border-l-4 p-4 mb-6 rounded shadow-sm relative overflow-hidden`} role="status">
-            <div className="absolute inset-0 opacity-10 bg-gradient-to-r from-white via-transparent to-white animate-[pulse_2s_ease-in-out_infinite]" />
-            <div className="flex items-center justify-between gap-2 relative z-10">
-              <p className="font-bold flex items-center gap-2">
-                <span className="inline-flex h-2.5 w-2.5 rounded-full bg-current animate-ping" />
-                {downloadState === 'success' ? 'Models ready' : downloadState === 'error' ? 'Download error' : 'Preparing models'}
-              </p>
-              <span className="text-xs text-slate-600 font-semibold">{Math.min(100, downloadPct)}%</span>
-            </div>
-            <p className="text-sm relative z-10">{downloadMsg}</p>
-            {downloadDetail && <p className="text-xs opacity-80 mt-1 relative z-10">{downloadDetail}</p>}
-            {downloadedText && <p className="text-xs text-slate-600 mt-1 relative z-10">{downloadedText}</p>}
-            <div className="w-full bg-slate-200 h-3 rounded-xl mt-3 overflow-hidden relative z-10 shadow-inner">
-              <div
-                className={`h-3 transition-all ${downloadBarColor} bar-stripes`}
-                style={{ width: `${Math.min(100, downloadPct)}%` }}
-                aria-label={`Download progress ${Math.min(100, downloadPct)} percent`}
-              ></div>
-            </div>
-            {downloadState === 'success' && <p className="text-xs mt-2 relative z-10">Download complete. Banner will close automatically.</p>}
-            {downloadState === 'error' && <p className="text-xs mt-2 relative z-10">No connection? The request might have timed out.</p>}
-          </div>
-        )}
-
-        {readyBannerVisible && (
-          <div className="w-full bg-green-50 border-l-4 border-green-500 text-green-800 p-3 mb-4 rounded shadow-sm flex items-center gap-3" role="status">
-            <button className="ready-check-btn" aria-label="Models installed">
-              ✓
-            </button>
-            <div>
-              <p className="font-semibold text-sm">Models installed locally</p>
-              <p className="text-xs text-green-700">Ready to analyze without downloads.</p>
-            </div>
-          </div>
-        )}
-
-        {view === 'input' && <InputSection onAnalyze={handleAnalyze} disabled={downloadState === 'active' && !isReady} />}
+        {view === 'input' && <InputSection onAnalyze={handleAnalyze} disabled={!verified} />}
 
         {view === 'processing' && <AnalysisLoader etaSeconds={etaSeconds} />}
 
